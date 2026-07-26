@@ -41,12 +41,10 @@ if (-not (Test-Admin)) {
 }
 
 $ErrorActionPreference = "Continue"
-$logFile = Join-Path $env:USERPROFILE "Desktop\optimize-windows-log.txt"
 
 function Write-Log {
     param([string]$Message)
     $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
-    Add-Content -Path $logFile -Value $line
     Write-Host $Message -ForegroundColor Cyan
 }
 
@@ -622,7 +620,7 @@ function Show-Menu {
     Write-Host "==================================================" -ForegroundColor Magenta
 }
 
-Write-Log "Script başlatıldı. Log dosyası: $logFile"
+Write-Log "Script başlatıldı."
 
 do {
     Show-Menu
@@ -657,4 +655,3 @@ do {
 } while ($choice -ne "0")
 
 Write-Log "Script tamamlandı."
-Write-Host "`nTüm işlemler $logFile dosyasına kaydedildi." -ForegroundColor Green

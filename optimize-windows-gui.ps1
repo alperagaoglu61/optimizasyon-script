@@ -50,7 +50,6 @@ if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 }
 
 $ErrorActionPreference = "Continue"
-$logFile = Join-Path $env:USERPROFILE "Desktop\optimize-windows-log.txt"
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 
@@ -61,7 +60,6 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 function Write-Log {
     param([string]$Message)
     $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
-    Add-Content -Path $logFile -Value $line
     Write-Host $Message -ForegroundColor Cyan
     if ($script:LogBox) {
         $script:LogBox.Dispatcher.Invoke([System.Action]{
@@ -1210,8 +1208,8 @@ $BtnApply.Add_Click({
     $BtnSelectAll.IsEnabled = $true
     $BtnDeselectAll.IsEnabled = $true
 
-    [System.Windows.MessageBox]::Show("Tüm seçili işlemler tamamlandı.`nLog dosyası: $logFile", "Tamamlandı", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+    [System.Windows.MessageBox]::Show("Tüm seçili işlemler tamamlandı.", "Tamamlandı", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
 })
 
-Write-Log "GUI başlatıldı. Log dosyası: $logFile"
+Write-Log "GUI başlatıldı."
 $window.ShowDialog() | Out-Null
