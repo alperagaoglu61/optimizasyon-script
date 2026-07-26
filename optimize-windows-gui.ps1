@@ -171,14 +171,6 @@ function Optimize-Services {
     # Bu servislerin gerçek "Name" değeri cihazdan cihaza değişebildiği için görünen ada (DisplayName) göre aranıyor.
     Write-Host "`n--- OEM (HP/Intel) servisleri ---" -ForegroundColor Green
     $displayNamePatterns = @(
-        "Intel(R) SUR QC Software Asset Manager*",
-        "HP Insights Analytics*",
-        "HP System Info HSA Service*",
-        "HP Omen HSA Service*",
-        "HP Network HSA Service*",
-        "HP Diagnostics HSA Service*",
-        "HP App Helper HSA Service*",
-        "Intel(R) Driver & Support Assistant*",
         "DialogBlockingService*"
     )
     foreach ($pattern in $displayNamePatterns) {
@@ -882,7 +874,8 @@ function Invoke-AllCategories {
         </Style>
     </Window.Resources>
 
-    <Grid Margin="14">
+    <Grid>
+        <Grid Name="MainContent" Margin="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -937,6 +930,50 @@ function Invoke-AllCategories {
         <TextBox Name="LogBox" Grid.Row="5" IsReadOnly="True" VerticalScrollBarVisibility="Auto"
                  HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
                  Background="#FF101010" Foreground="#FF4CD964" BorderBrush="#FF3F3F46" BorderThickness="1"/>
+        </Grid>
+
+        <Grid Name="LockScreen" Background="{StaticResource BgBrush}" Cursor="Hand">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Text="🖥" FontSize="26" Foreground="{StaticResource SubTextBrush}" Opacity="0.45"
+                       Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="70,60,0,0"/>
+            <TextBlock Text="💽" FontSize="26" Foreground="{StaticResource SubTextBrush}" Opacity="0.45"
+                       Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,60,70,0"/>
+            <TextBlock Text="🧠" FontSize="26" Foreground="{StaticResource SubTextBrush}" Opacity="0.45"
+                       Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="70,0,0,60"/>
+            <TextBlock Text="🌐" FontSize="26" Foreground="{StaticResource SubTextBrush}" Opacity="0.45"
+                       Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,70,60"/>
+
+            <StackPanel Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Windows Optimizasyon Aracı" FontSize="32" FontWeight="Bold"
+                           Foreground="{StaticResource TextBrush}" HorizontalAlignment="Center"/>
+                <TextBlock Text="Sisteminizi Keşfedin ve Güçlendirin" FontSize="14" Foreground="{StaticResource SubTextBrush}"
+                           HorizontalAlignment="Center" Margin="0,4,0,32"/>
+
+                <Border Name="AvatarCircle" Width="140" Height="140" Background="{StaticResource CardBrush}"
+                        BorderBrush="{StaticResource AccentBrush}" BorderThickness="3" CornerRadius="70"
+                        HorizontalAlignment="Center">
+                    <TextBlock Text="⏻" FontSize="56" Foreground="{StaticResource AccentBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+
+                <TextBlock Text="Devam etmek için tıklayın veya Enter'a basın" Foreground="{StaticResource SubTextBrush}"
+                           FontSize="13" HorizontalAlignment="Center" Margin="0,20,0,0"/>
+            </StackPanel>
+
+            <StackPanel Grid.Row="1" HorizontalAlignment="Center" Margin="0,0,0,10">
+                <ProgressBar Name="LockProgressBar" Height="8" Width="420" Value="72" Maximum="100"/>
+                <TextBlock Text="Sistem Analizi Hazırlanıyor..." Foreground="{StaticResource SubTextBrush}" FontSize="11"
+                           HorizontalAlignment="Center" Margin="0,10,0,0"/>
+            </StackPanel>
+
+            <TextBlock Grid.Row="2" Text="Geliştirici : Alper Ağaoğlu" Foreground="{StaticResource SubTextBrush}"
+                       FontSize="11" HorizontalAlignment="Right" Margin="0,0,20,12"/>
+        </Grid>
     </Grid>
 </Window>
 "@
@@ -953,9 +990,31 @@ $BtnDeselectAll    = $window.FindName("BtnDeselectAll")
 $BtnApply          = $window.FindName("BtnApply")
 $ProgressBarCtrl   = $window.FindName("ProgressBarCtrl")
 $LogBox            = $window.FindName("LogBox")
+$LockScreen        = $window.FindName("LockScreen")
+$AvatarCircle      = $window.FindName("AvatarCircle")
 
 $script:LogBox          = $LogBox
 $script:ProgressBarCtrl = $ProgressBarCtrl
+
+# --- Kilit ekranı: pencerenin herhangi bir yerine tıklayınca veya Enter'a basınca yavaşça solarak kaybolur ---
+function Close-LockScreen {
+    if ($LockScreen.Visibility -ne [System.Windows.Visibility]::Visible) { return }
+    $LockScreen.IsHitTestVisible = $false
+    $fade = New-Object System.Windows.Media.Animation.DoubleAnimation
+    $fade.From = 1.0
+    $fade.To = 0.0
+    $fade.Duration = [System.Windows.Duration]::new([TimeSpan]::FromSeconds(0.7))
+    $fade.EasingFunction = New-Object System.Windows.Media.Animation.QuadraticEase
+    $fade.EasingFunction.EasingMode = [System.Windows.Media.Animation.EasingMode]::EaseOut
+    $fade.Add_Completed({ $LockScreen.Visibility = [System.Windows.Visibility]::Collapsed })
+    $LockScreen.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fade)
+}
+
+$LockScreen.Add_MouseLeftButtonDown({ Close-LockScreen })
+$window.Add_KeyDown({
+    param($senderObj, $e)
+    if ($e.Key -eq [System.Windows.Input.Key]::Enter) { Close-LockScreen }
+})
 
 # Kategori ikonları (yalnızca görsel, mantığı etkilemez)
 $script:CategoryIcons = @{

@@ -132,14 +132,6 @@ function Optimize-Services {
     # Bu servislerin gerçek "Name" değeri cihazdan cihaza değişebildiği için görünen ada (DisplayName) göre aranıyor.
     Write-Host "`n--- OEM (HP/Intel) servisleri ---" -ForegroundColor Green
     $displayNamePatterns = @(
-        "Intel(R) SUR QC Software Asset Manager*",
-        "HP Insights Analytics*",
-        "HP System Info HSA Service*",
-        "HP Omen HSA Service*",
-        "HP Network HSA Service*",
-        "HP Diagnostics HSA Service*",
-        "HP App Helper HSA Service*",
-        "Intel(R) Driver & Support Assistant*",
         "DialogBlockingService*"
     )
     foreach ($pattern in $displayNamePatterns) {
