@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
     optimize-windows-gui.ps1
     -------------------------
@@ -670,15 +670,221 @@ function Invoke-AllCategories {
 }
 
 # ============================================================
-#  GUI OLUŞTURMA (WPF)
+#  GUI OLUŞTURMA (WPF) - Koyu tema
 # ============================================================
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Windows Optimizasyon Aracı" Height="720" Width="1000"
-        WindowStartupLocation="CenterScreen">
-    <Grid Margin="10">
+        Title="Windows Optimizasyon Aracı" Height="760" Width="1040"
+        WindowStartupLocation="CenterScreen"
+        Background="#FF1E1E1E" FontFamily="Segoe UI">
+    <Window.Resources>
+        <SolidColorBrush x:Key="BgBrush" Color="#FF1E1E1E"/>
+        <SolidColorBrush x:Key="PanelBrush" Color="#FF252526"/>
+        <SolidColorBrush x:Key="CardBrush" Color="#FF2D2D30"/>
+        <SolidColorBrush x:Key="BorderBrush2" Color="#FF3F3F46"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#FFE6E6E6"/>
+        <SolidColorBrush x:Key="SubTextBrush" Color="#FF9D9D9D"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF0078D4"/>
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF1A88E0"/>
+        <SolidColorBrush x:Key="AccentPressedBrush" Color="#FF005A9E"/>
+        <SolidColorBrush x:Key="RunningBg" Color="#FF1F3B27"/>
+        <SolidColorBrush x:Key="RunningFg" Color="#FF4CAF50"/>
+        <SolidColorBrush x:Key="StoppedBg" Color="#FF3A3A3A"/>
+        <SolidColorBrush x:Key="StoppedFg" Color="#FFB0B0B0"/>
+
+        <Style x:Key="ModernButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentPressedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Background" Value="#FF3F3F46"/>
+                                <Setter Property="Foreground" Value="#FF7A7A7A"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ListBox">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush2}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="4"/>
+        </Style>
+
+        <Style x:Key="CategoryItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <DataTemplate x:Key="CategoryItemTemplate">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="24"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Icon}" FontSize="15" VerticalAlignment="Top"/>
+                <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            </Grid>
+        </DataTemplate>
+
+        <Style x:Key="SearchBoxStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush2}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="CaretBrush" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ProgressBar">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+
+        <Style x:Key="ThinScrollBarThumb" TargetType="Thumb">
+            <Setter Property="Background" Value="#40FFFFFF"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#70FFFFFF"/>
+                </Trigger>
+                <Trigger Property="IsDragging" Value="True">
+                    <Setter Property="Background" Value="#90FFFFFF"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track Name="PART_Track" IsDirectionReversed="True" Orientation="{TemplateBinding Orientation}"
+                                   Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                                   ViewportSize="{TemplateBinding ViewportSize}"
+                                   Value="{TemplateBinding Value}">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False" Background="Transparent" BorderThickness="0"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False" Background="Transparent" BorderThickness="0"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ThinScrollBarThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Vertical">
+                    <Setter Property="Width" Value="8"/>
+                </Trigger>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Height" Value="8"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ToggleSwitchStyle" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Width="42" Height="22" VerticalAlignment="Center">
+                            <Border x:Name="Track" CornerRadius="11" Background="#FF3F3F46"/>
+                            <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="#FFC8C8C8" HorizontalAlignment="Left" Margin="3,0,0,0"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
+                                <Setter TargetName="Thumb" Property="Margin" Value="0,0,3,0"/>
+                                <Setter TargetName="Thumb" Property="Fill" Value="White"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.85"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="OpsCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource CardBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush2}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="10"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -686,29 +892,51 @@ function Invoke-AllCategories {
             <RowDefinition Height="180"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button Name="BtnSelectAll" Content="Tümünü Seç" Width="120" Height="28" Margin="0,0,8,0"/>
-            <Button Name="BtnDeselectAll" Content="Tümünü Kaldır" Width="120" Height="28"/>
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,14">
+            <TextBlock Text="🧰" FontSize="28" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Windows Optimizasyon Aracı" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
+                <TextBlock Text="Servisleri, başlangıç öğelerini ve sistem ayarlarını tek yerden düzenle" FontSize="12" Foreground="{StaticResource SubTextBrush}"/>
+            </StackPanel>
         </StackPanel>
 
-        <Grid Grid.Row="1">
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+            <Button Name="BtnSelectAll" Content="Tümünü Seç" Width="130" Height="30" Margin="0,0,8,0" Style="{StaticResource ModernButton}"/>
+            <Button Name="BtnDeselectAll" Content="Tümünü Kaldır" Width="130" Height="30" Style="{StaticResource ModernButton}"/>
+        </StackPanel>
+
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="250"/>
+                <ColumnDefinition Width="12"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <ListBox Name="CategoryList" Grid.Column="0" Margin="0,0,8,0" FontSize="13"/>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-                <StackPanel Name="OpsPanel" Margin="4"/>
+
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                    <TextBox Name="CategorySearch" Style="{StaticResource SearchBoxStyle}"/>
+                    <TextBlock Name="SearchPlaceholder" Text="Kategori ara..." Foreground="{StaticResource SubTextBrush}" Margin="10,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                </Grid>
+                <ListBox Name="CategoryList" Grid.Row="1" ItemTemplate="{StaticResource CategoryItemTemplate}" ItemContainerStyle="{StaticResource CategoryItemStyle}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+            </Grid>
+
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel Name="OpsPanel" Margin="2"/>
             </ScrollViewer>
         </Grid>
 
-        <Button Name="BtnApply" Grid.Row="2" Content="Seçilenleri Uygula" Height="34" Margin="0,8,0,8" FontWeight="Bold"/>
+        <Button Name="BtnApply" Grid.Row="3" Content="Seçilenleri Uygula" Height="38" Margin="0,10,0,8" FontSize="14" Style="{StaticResource ModernButton}"/>
 
-        <ProgressBar Name="ProgressBarCtrl" Grid.Row="3" Height="20" Minimum="0" Margin="0,0,0,8"/>
+        <ProgressBar Name="ProgressBarCtrl" Grid.Row="4" Height="10" Minimum="0" Margin="0,0,0,8"/>
 
-        <TextBox Name="LogBox" Grid.Row="4" IsReadOnly="True" VerticalScrollBarVisibility="Auto"
+        <TextBox Name="LogBox" Grid.Row="5" IsReadOnly="True" VerticalScrollBarVisibility="Auto"
                  HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
-                 Background="#FF101010" Foreground="#FF00FF00"/>
+                 Background="#FF101010" Foreground="#FF4CD964" BorderBrush="#FF3F3F46" BorderThickness="1"/>
     </Grid>
 </Window>
 "@
@@ -716,16 +944,46 @@ function Invoke-AllCategories {
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
-$CategoryList    = $window.FindName("CategoryList")
-$OpsPanel        = $window.FindName("OpsPanel")
-$BtnSelectAll    = $window.FindName("BtnSelectAll")
-$BtnDeselectAll  = $window.FindName("BtnDeselectAll")
-$BtnApply        = $window.FindName("BtnApply")
-$ProgressBarCtrl = $window.FindName("ProgressBarCtrl")
-$LogBox          = $window.FindName("LogBox")
+$CategoryList      = $window.FindName("CategoryList")
+$CategorySearch    = $window.FindName("CategorySearch")
+$SearchPlaceholder = $window.FindName("SearchPlaceholder")
+$OpsPanel          = $window.FindName("OpsPanel")
+$BtnSelectAll      = $window.FindName("BtnSelectAll")
+$BtnDeselectAll    = $window.FindName("BtnDeselectAll")
+$BtnApply          = $window.FindName("BtnApply")
+$ProgressBarCtrl   = $window.FindName("ProgressBarCtrl")
+$LogBox            = $window.FindName("LogBox")
 
 $script:LogBox          = $LogBox
 $script:ProgressBarCtrl = $ProgressBarCtrl
+
+# Kategori ikonları (yalnızca görsel, mantığı etkilemez)
+$script:CategoryIcons = @{
+    "Servisler"                             = "🛠"
+    "Başlangıç Programları"                 = "🚀"
+    "Görsel Efektler"                       = "🎨"
+    "Temizlik"                              = "🧹"
+    "Ağ/DNS"                                = "🌐"
+    "Güç Planı"                             = "⚡"
+    "Ek Optimizasyonlar"                    = "➕"
+    "Başlangıç/Kurtarma ve Sistem Koruması" = "🛡"
+    "Gizlilik"                              = "🔒"
+}
+
+function Get-CategoryItems {
+    param([string]$Filter = "")
+    $names = @($script:CategoryMap.Keys)
+    if ($Filter) {
+        $needle = $Filter.ToLower()
+        $names = @($names | Where-Object { $_.ToLower().Contains($needle) })
+    }
+    return @($names | ForEach-Object { [PSCustomObject]@{ Name = $_; Icon = $script:CategoryIcons[$_] } })
+}
+
+# --- Servis satırlarındaki "Ad (Açıklama) ... Mevcut durum: X" metnini
+#     ad / açıklama / durum parçalarına ayırmak için kullanılır (yalnızca görsel ayrıştırma). ---
+$script:ReWithDesc = '^"(?<name>[^"]+)"\s\((?<desc>.+)\)\sservisini durdurup devre dışı bırakayım mı\?\sMevcut durum:\s(?<status>\S+)$'
+$script:ReNoDesc   = '^"(?<name>[^"]+)"\sservisini durdurup devre dışı bırakayım mı\?\sMevcut durum:\s(?<status>\S+)$'
 
 function Update-OpsPanel {
     param([string]$Category)
@@ -734,24 +992,93 @@ function Update-OpsPanel {
     if (-not $ops) {
         $tb = New-Object System.Windows.Controls.TextBlock
         $tb.Text = "Bu kategoride uygulanabilir işlem bulunamadı (ilgili servis/özellik bu sistemde yok)."
+        $tb.Foreground = $window.FindResource("SubTextBrush")
         $tb.Margin = "4"
         $tb.TextWrapping = [System.Windows.TextWrapping]::Wrap
         $OpsPanel.Children.Add($tb) | Out-Null
         return
     }
+
     foreach ($op in $ops) {
+        $name = $op.Question
+        $desc = $null
+        $status = $null
+
+        if ($op.Question -match $script:ReWithDesc) {
+            $name = $Matches.name; $desc = $Matches.desc; $status = $Matches.status
+        } elseif ($op.Question -match $script:ReNoDesc) {
+            $name = $Matches.name; $status = $Matches.status
+        }
+
+        $card = New-Object System.Windows.Controls.Border
+        $card.Style = $window.FindResource("OpsCardStyle")
+
+        $grid = New-Object System.Windows.Controls.Grid
+        $colToggle = New-Object System.Windows.Controls.ColumnDefinition
+        $colToggle.Width = New-Object System.Windows.GridLength(46)
+        $colText = New-Object System.Windows.Controls.ColumnDefinition
+        $colText.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
+        $colStatus = New-Object System.Windows.Controls.ColumnDefinition
+        $colStatus.Width = [System.Windows.GridLength]::Auto
+        $grid.ColumnDefinitions.Add($colToggle) | Out-Null
+        $grid.ColumnDefinitions.Add($colText) | Out-Null
+        $grid.ColumnDefinitions.Add($colStatus) | Out-Null
+
         $cb = New-Object System.Windows.Controls.CheckBox
-        $textBlock = New-Object System.Windows.Controls.TextBlock
-        $textBlock.Text = $op.Question
-        $textBlock.TextWrapping = [System.Windows.TextWrapping]::Wrap
-        $textBlock.MaxWidth = 680
-        $cb.Content = $textBlock
+        $cb.Style = $window.FindResource("ToggleSwitchStyle")
+        $cb.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
         $cb.Tag = $op
-        $cb.Margin = "4"
         $cb.IsChecked = $op.Checked
         $cb.Add_Checked({ $this.Tag.Checked = $true })
         $cb.Add_Unchecked({ $this.Tag.Checked = $false })
-        $OpsPanel.Children.Add($cb) | Out-Null
+        [System.Windows.Controls.Grid]::SetColumn($cb, 0)
+        $grid.Children.Add($cb) | Out-Null
+
+        $textStack = New-Object System.Windows.Controls.StackPanel
+        $textStack.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+        $textStack.Margin = "10,0,10,0"
+
+        $titleBlock = New-Object System.Windows.Controls.TextBlock
+        $titleBlock.Text = $name
+        $titleBlock.FontWeight = [System.Windows.FontWeights]::Bold
+        $titleBlock.FontSize = 13
+        $titleBlock.Foreground = $window.FindResource("TextBrush")
+        $titleBlock.TextWrapping = [System.Windows.TextWrapping]::Wrap
+        $textStack.Children.Add($titleBlock) | Out-Null
+
+        if ($desc) {
+            $descBlock = New-Object System.Windows.Controls.TextBlock
+            $descBlock.Text = $desc
+            $descBlock.FontSize = 11
+            $descBlock.Foreground = $window.FindResource("SubTextBrush")
+            $descBlock.TextWrapping = [System.Windows.TextWrapping]::Wrap
+            $descBlock.Margin = "0,2,0,0"
+            $textStack.Children.Add($descBlock) | Out-Null
+        }
+        [System.Windows.Controls.Grid]::SetColumn($textStack, 1)
+        $grid.Children.Add($textStack) | Out-Null
+
+        if ($status) {
+            $isRunning = $status -eq "Running"
+            $pill = New-Object System.Windows.Controls.Border
+            $pill.CornerRadius = "8"
+            $pill.Padding = "8,3"
+            $pill.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+            $pill.Background = $window.FindResource($(if ($isRunning) { "RunningBg" } else { "StoppedBg" }))
+
+            $pillText = New-Object System.Windows.Controls.TextBlock
+            $pillText.Text = $status
+            $pillText.FontSize = 10
+            $pillText.FontWeight = [System.Windows.FontWeights]::SemiBold
+            $pillText.Foreground = $window.FindResource($(if ($isRunning) { "RunningFg" } else { "StoppedFg" }))
+            $pill.Child = $pillText
+
+            [System.Windows.Controls.Grid]::SetColumn($pill, 2)
+            $grid.Children.Add($pill) | Out-Null
+        }
+
+        $card.Child = $grid
+        $OpsPanel.Children.Add($card) | Out-Null
     }
 }
 
@@ -759,20 +1086,40 @@ function Update-OpsPanel {
 $script:CollectMode = $true
 Invoke-AllCategories
 
-$CategoryList.ItemsSource = [string[]]$script:CategoryMap.Keys
+$CategoryList.ItemsSource = Get-CategoryItems
 $CategoryList.Add_SelectionChanged({
-    if ($CategoryList.SelectedItem) { Update-OpsPanel -Category $CategoryList.SelectedItem }
+    if ($CategoryList.SelectedItem) { Update-OpsPanel -Category $CategoryList.SelectedItem.Name }
 })
 $CategoryList.SelectedIndex = 0
 
+$CategorySearch.Add_TextChanged({
+    $filterText = $CategorySearch.Text
+    $SearchPlaceholder.Visibility = if ($filterText.Length -gt 0) { [System.Windows.Visibility]::Collapsed } else { [System.Windows.Visibility]::Visible }
+
+    $previousName = if ($CategoryList.SelectedItem) { $CategoryList.SelectedItem.Name } else { $null }
+    $filtered = Get-CategoryItems -Filter $filterText
+    $CategoryList.ItemsSource = $filtered
+
+    if ($filtered.Count -eq 0) {
+        $OpsPanel.Children.Clear()
+        return
+    }
+    $match = $filtered | Where-Object { $_.Name -eq $previousName } | Select-Object -First 1
+    if ($match) {
+        $CategoryList.SelectedItem = $match
+    } else {
+        $CategoryList.SelectedIndex = 0
+    }
+})
+
 $BtnSelectAll.Add_Click({
     foreach ($o in $script:CollectedOps) { $o.Checked = $true }
-    if ($CategoryList.SelectedItem) { Update-OpsPanel -Category $CategoryList.SelectedItem }
+    if ($CategoryList.SelectedItem) { Update-OpsPanel -Category $CategoryList.SelectedItem.Name }
 })
 
 $BtnDeselectAll.Add_Click({
     foreach ($o in $script:CollectedOps) { $o.Checked = $false }
-    if ($CategoryList.SelectedItem) { Update-OpsPanel -Category $CategoryList.SelectedItem }
+    if ($CategoryList.SelectedItem) { Update-OpsPanel -Category $CategoryList.SelectedItem.Name }
 })
 
 $BtnApply.Add_Click({
