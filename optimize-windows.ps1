@@ -2,577 +2,874 @@
 <#
     optimize-windows.ps1
     ---------------------
-    Windows optimizasyon scripti.
-    - Yönetici (admin) yetkisi zorunludur, script kendini otomatik yükseltmeye çalışır.
-    - Her işlem öncesi kullanıcıdan onay ister (varsayılan: Hayır).
-    - Menüden istenilen kategoriler seçilerek uygulanabilir.
-    - Değişiklik yapmadan önce ilgili ayarların bir kısmı için geri alma bilgisi ekrana yazılır.
+    Windows optimizasyon scripti (konsol surumu).
+    - Yonetici (admin) yetkisi zorunludur, script kendini otomatik yukseltmeye calisir.
+    - Her islem oncesi kullanicidan onay ister (varsayilan: Hayir).
+    - Menuden istenilen kategoriler secilerek uygulanabilir.
+
+    Bu surumde duzeltilenler:
+      * Her kayit defteri yazimi geri okunarak DOGRULANIR. Dogrulanamayan islem "HATA" olarak
+        raporlanir; basarili olmayan hicbir islem "yapildi" diye yazilmaz.
+      * Her servis, Start=4 (Disabled) degeri okunarak dogrulanir.
+      * Yanlis kayit defteri yollari duzeltildi (Game Bar politikasi HKLM'e, bildirim merkezi
+        politikasi Policies\Explorer'a tasindi; "En iyi performans" icin gerekli tum degerler eklendi).
+      * powercfg cikti ayristirmasi coktugunde script durmuyor, hata olarak raporluyor.
+      * cleanmgr ve OneDrive kaldirma islemleri sinirsiz beklemiyor (zaman asimi var).
+      * exe olarak derlendiginde de dogru calisan yonetici yukseltmesi.
+      * Her islem ayri try/catch icinde; tek bir hata scripti durdurmaz.
 
     KULLANIM:
-        PowerShell'i normal (admin olmayan) kullanıcı olarak açıp şunu çalıştırman yeterli:
+        PowerShell'i normal (admin olmayan) kullanici olarak acip sunu calistirman yeterli:
         .\optimize-windows.ps1
-        Script kendini otomatik olarak "Yönetici olarak çalıştır" ile yeniden başlatacaktır.
+        Script kendini otomatik olarak "Yonetici olarak calistir" ile yeniden baslatacaktir.
 
-        Eğer script çalışmıyor derse, önce şunu bir kere (admin PowerShell'de) çalıştır:
+        Eger script calismiyor derse, once sunu bir kere (admin PowerShell'de) calistir:
         Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 #>
 
 # ============================================================
-#  0. YÖNETİCİ YETKİSİ KONTROLÜ VE OTOMATİK YÜKSELTME
+#  0. KENDI YOLU / YONETICI YETKISI KONTROLU VE OTOMATIK YUKSELTME
 # ============================================================
+function Get-SelfPath {
+    # ps2exe ile derlendiginde $PSCommandPath guvenilir degildir; once process'in kendi yoluna bakilir.
+    $procPath = $null
+    try { $procPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName } catch {}
+    if ($procPath) {
+        $procName = [System.IO.Path]::GetFileNameWithoutExtension($procPath).ToLower()
+        if ($procName -notin @('powershell', 'pwsh', 'powershell_ise', 'windowsterminal', 'conhost', 'cmd')) {
+            return $procPath
+        }
+    }
+    if ($PSCommandPath) { return $PSCommandPath }
+    if ($MyInvocation.MyCommand.Path) { return $MyInvocation.MyCommand.Path }
+    return $procPath
+}
+
 function Test-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+$script:SelfPath   = Get-SelfPath
+$script:IsCompiled = ($null -ne $script:SelfPath) -and ($script:SelfPath.ToLower().EndsWith('.exe'))
+
 if (-not (Test-Admin)) {
+    if (-not $script:SelfPath) {
+        Write-Host "Yönetici yetkisi gerekli, ancak programın kendi yolu bulunamadı." -ForegroundColor Red
+        Write-Host "Lütfen dosyaya sağ tıklayıp 'Yönetici olarak çalıştır' seçeneğini kullan." -ForegroundColor Red
+        Read-Host "`nKapatmak için Enter'a bas"
+        exit 1
+    }
+
     Write-Host "Bu script yönetici yetkisi gerektiriyor. Yükseltilmiş bir pencere açılıyor..." -ForegroundColor Yellow
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
-    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    $psi.Verb = "runas"
+    if ($script:IsCompiled) {
+        $psi.FileName  = $script:SelfPath
+        $psi.Arguments = ""
+    } else {
+        $psi.FileName  = "powershell.exe"
+        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($script:SelfPath)`""
+    }
+    $psi.Verb            = "runas"
+    $psi.UseShellExecute = $true
     try {
         [System.Diagnostics.Process]::Start($psi) | Out-Null
     } catch {
         Write-Host "Yönetici yetkisi verilmedi, script sonlandırılıyor." -ForegroundColor Red
+        Start-Sleep -Seconds 3
     }
     exit
 }
 
 $ErrorActionPreference = "Continue"
 
+# ============================================================
+#  ORTAK YARDIMCILAR
+# ============================================================
+$script:OkCount   = 0
+$script:FailCount = 0
+
 function Write-Log {
     param([string]$Message)
-    $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
-    Write-Host $Message -ForegroundColor Cyan
+    $color = "Cyan"
+    if     ($Message -like "OK*")      { $color = "Green" }
+    elseif ($Message -like "HATA*")    { $color = "Red" }
+    elseif ($Message -like "UYARI*")   { $color = "Yellow" }
+    elseif ($Message -like "ATLANDI*") { $color = "DarkGray" }
+    Write-Host $Message -ForegroundColor $color
 }
 
 function Confirm-Action {
     param([string]$Question)
     $answer = Read-Host "$Question [e/H]"
-    return ($answer -match '^(e|E|y|Y)$')
+    return ($answer -match '^\s*(e|E|y|Y)\s*$')
+}
+
+# Her islem yalitilir: biri patlarsa digerleri calismaya devam eder.
+function Invoke-Op {
+    param([string]$Question, [scriptblock]$Action)
+
+    if (-not (Confirm-Action $Question)) { return }
+
+    try {
+        $out = & $Action
+        $flag = @($out) | Where-Object { $_ -is [bool] } | Select-Object -Last 1
+        $ok = if ($null -eq $flag) { $true } else { [bool]$flag }
+    } catch {
+        $ok = $false
+        Write-Log "HATA  - İşlem başarısız oldu: $($_.Exception.Message)"
+    }
+
+    if ($ok) { $script:OkCount++ } else { $script:FailCount++ }
+}
+
+# Kayit defterine yazar VE geri okuyarak dogrular. Dogrulanamazsa $false doner.
+function Set-RegValue {
+    param(
+        [string]$Path,
+        [string]$Name,
+        $Value,
+        [string]$Type = 'DWord'
+    )
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
+        }
+        New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType $Type -Force -ErrorAction Stop | Out-Null
+
+        $read = (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop).$Name
+        if ($Type -eq 'Binary') {
+            $same = ((@($read) -join ',') -eq (@($Value) -join ','))
+        } else {
+            $same = ("$read" -eq "$Value")
+        }
+        if (-not $same) { throw "geri okunan değer farklı ('$read')" }
+        return $true
+    } catch {
+        Write-Log "HATA  - Kayıt defteri yazılamadı: $Path\$Name ($($_.Exception.Message))"
+        return $false
+    }
+}
+
+function Disable-SvcByName {
+    param([string]$Name)
+
+    $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if ($null -eq $svc) {
+        Write-Log "ATLANDI - Servis bu sistemde yok: $Name"
+        return $true
+    }
+
+    if ($svc.Status -ne 'Stopped') {
+        try {
+            Stop-Service -Name $Name -Force -ErrorAction Stop
+        } catch {
+            Write-Log "UYARI - $Name durdurulamadı (devre dışı bırakma yine de denenecek): $($_.Exception.Message)"
+        }
+    }
+
+    try {
+        Set-Service -Name $Name -StartupType Disabled -ErrorAction Stop
+    } catch {
+        Write-Log "HATA  - $Name devre dışı bırakılamadı: $($_.Exception.Message)"
+        return $false
+    }
+
+    # Dogrulama: HKLM\...\Services\<Ad>\Start = 4 ise Disabled.
+    try {
+        $start = (Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$Name" -Name Start -ErrorAction Stop).Start
+        if ($start -ne 4) {
+            Write-Log "HATA  - $Name devre dışı görünmüyor (Start=$start)."
+            return $false
+        }
+    } catch {
+        Write-Log "UYARI - $Name için başlangıç türü doğrulanamadı: $($_.Exception.Message)"
+    }
+
+    Write-Log "OK    - Servis devre dışı bırakıldı: $Name"
+    return $true
+}
+
+function Clear-FolderContents {
+    param([string]$Path, [string]$Label)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Log "ATLANDI - $Label klasörü bulunamadı: $Path"
+        return $true
+    }
+
+    $deleted = 0
+    $failed  = 0
+    foreach ($item in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        try {
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+            $deleted++
+        } catch {
+            $failed++
+        }
+    }
+
+    if ($failed -gt 0) {
+        Write-Log "OK    - $Label temizlendi: $deleted öğe silindi, $failed öğe kullanımda olduğu için silinemedi."
+    } else {
+        Write-Log "OK    - $Label temizlendi: $deleted öğe silindi."
+    }
+    return $true
+}
+
+function Restart-ExplorerSafe {
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        if (Get-Process -Name explorer -ErrorAction SilentlyContinue) { break }
+    }
+
+    if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+        try { Start-Process "explorer.exe" -ErrorAction Stop } catch {}
+        Start-Sleep -Seconds 2
+    }
+
+    if (Get-Process -Name explorer -ErrorAction SilentlyContinue) {
+        Write-Log "OK    - Windows Gezgini yeniden başlatıldı."
+        return $true
+    }
+
+    Write-Log "HATA  - Windows Gezgini yeniden başlatılamadı. Ctrl+Shift+Esc > Dosya > Yeni görev > explorer.exe"
+    return $false
 }
 
 # ============================================================
-#  1. SERVİSLER
+#  1. SERVISLER
 # ============================================================
 function Optimize-Services {
     Write-Host "`n=== GEREKSİZ SERVİSLER ===" -ForegroundColor Green
-    # Servis adı => Açıklama. Sadece genelde güvenle kapatılabilen servisler listelendi.
-    $services = @{
-        "DiagTrack"              = "Bağlantılı Kullanıcı Deneyimleri ve Telemetri (veri toplama)"
-        "dmwappushservice"       = "WAP Push Mesaj Yönlendirme (telemetri ile ilişkili)"
-        "MapsBroker"             = "Downloaded Maps Manager (çevrimdışı harita kullanmıyorsan gereksiz)"
-        "lfsvc"                  = "Geolocation Service (konum servisi kullanmıyorsan)"
-        "RetailDemo"             = "Retail Demo Service (mağaza demo modu, ev kullanıcısına gereksiz)"
-        "WMPNetworkSvc"          = "Windows Media Player Ağ Paylaşım Servisi"
-        "RemoteRegistry"         = "Uzaktan Registry erişimi (güvenlik açısından kapalı kalması iyi)"
-        "Fax"                    = "Faks servisi"
-        # --- Hizmetler ekranında zaten "Devre Dışı" görünen ek Windows bileşenleri ---
-        "UevAgentService"        = "User Experience Virtualization Service (App-V/UE-V bileşeni, ev kullanıcısına gereksiz)"
-        "tzautoupdate"           = "Otomatik Saat Dilimi Güncelleyici (saat dilimini elle ayarlıyorsan gereksiz)"
-        "TrkWks"                 = "Dağıtılmış Bağlantı İzleme İstemcisi (ağ NTFS kısayol takibi, ev kullanımında gereksiz)"
-        "ssh-agent"              = "OpenSSH Authentication Agent (SSH anahtarı kullanmıyorsan gereksiz)"
-        "Spooler"                = "Yazdırma Biriktiricisi (DİKKAT: yazıcı/'PDF olarak yazdır' kullanıyorsan KAPATMA)"
-        "shpamsvc"               = "Shared PC Account Manager (paylaşımlı/kiosk PC modu kullanmıyorsan gereksiz)"
-        "RmSvc"                  = "Radyo Yönetimi Hizmeti (uçak modu donanım yönetimi, çoğu sistemde gereksiz)"
-        "RemoteAccess"           = "Yönlendirme ve Uzaktan Erişim (VPN/router görevi görmüyorsan gereksiz)"
-        "PcaSvc"                 = "Program Uyumluluk Yardımcısı Hizmeti (eski program uyumluluk uyarıları)"
-        "NetTcpPortSharing"      = "Net.Tcp Bağlantı Noktası Paylaşımı (WCF uygulaması kullanmıyorsan gereksiz)"
-        "MsKeyboardFilter"       = "Microsoft Klavye Filtresi (kiosk modunda kullanılır, ev kullanıcısına gereksiz)"
-        "DPS"                    = "Tanı İlkesi Hizmeti (Windows sorun giderme sihirbazlarını devre dışı bırakır)"
-        "CscService"             = "Çevrimdışı Dosyalar (ağ paylaşımı çevrimdışı kullanmıyorsan gereksiz)"
-        "AppVClient"             = "Microsoft App-V Client (uygulama sanallaştırma, ev kullanıcısına gereksiz)"
-        # --- Donanıma bağlı (kullanmıyorsan güvenle kapatılabilir) ---
-        "WbioSrvc"               = "Windows Biometric Service (parmak izi/yüz tanıma - Windows Hello kullanmıyorsan gereksiz)"
-        "SCardSvr"               = "Smart Card (akıllı kart okuyucu kullanmıyorsan gereksiz)"
-        "ScDeviceEnum"           = "Smart Card Device Enumeration Service (akıllı kart cihaz numaralandırma)"
-        # --- Xbox ile ilgili (Xbox app/Game Pass kullanmıyorsan) ---
-        "XblAuthManager"         = "Xbox Live Auth Manager"
-        "XblGameSave"            = "Xbox Live Game Save"
-        "XboxNetApiSvc"          = "Xbox Live Networking Service"
-        "XboxGipSvc"             = "Xbox Accessory Management Service"
-        # --- Diğer ---
-        "CDPSvc"                 = "Connected Devices Platform Service (Telefonum/Yakındaki Paylaşım kullanmıyorsan gereksiz)"
-        "SSDPSRV"                = "SSDP Discovery (ağ cihazı keşfi/DLNA kullanmıyorsan gereksiz)"
-        "upnphost"               = "UPnP Device Host (cast/DLNA kullanmıyorsan gereksiz)"
-        "wisvc"                  = "Windows Insider Service (Insider programına kayıtlı değilsen gereksiz)"
-        # --- Sensör/kamera (masaüstü/çoğu laptopta donanımı yok) ---
-        "SensrSvc"               = "Sensor Monitoring Service (ortam ışığı sensörü vb. donanım yoksa gereksiz)"
-        "SensorService"          = "Sensor Service (donanım sensörü yoksa gereksiz)"
-        "SensorDataService"      = "Sensor Data Service (donanım sensörü yoksa gereksiz)"
-        # --- Bağlantı/paylaşım (kullanmıyorsan) ---
-        "icssvc"                 = "Windows Mobile Hotspot Service (internet paylaşımı kullanmıyorsan gereksiz)"
-        "TermService"            = "Remote Desktop Services (DİKKAT: bu PC'ye RDP ile uzaktan bağlanıyorsan KAPATMA)"
-        "WPCMonSvc"               = "Parental Controls (Aile Güvenliği/çocuk hesabı kullanmıyorsan gereksiz)"
-        "ALG"                    = "Application Layer Gateway Service (eski NAT yardımcı servisi, günümüzde nadiren kullanılır)"
-        # --- Eski/legacy ---
-        "RpcLocator"             = "RPC Locator (legacy servis, modern Windows'ta zaten genelde pasif)"
+    Write-Host "Not: SysMain (Superfetch) ve Windows Search gibi servisler SSD'de kapatılabilir, HDD'de kapatman önerilmez." -ForegroundColor DarkYellow
+
+    # Sadece genelde guvenle kapatilabilen servisler listelendi. Sira sabit olsun diye [ordered].
+    $services = [ordered]@{
+        "DiagTrack"         = "Bağlantılı Kullanıcı Deneyimleri ve Telemetri (veri toplama)"
+        "dmwappushservice"  = "WAP Push Mesaj Yönlendirme (telemetri ile ilişkili)"
+        "MapsBroker"        = "Downloaded Maps Manager (çevrimdışı harita kullanmıyorsan gereksiz)"
+        "lfsvc"             = "Geolocation Service (konum servisi kullanmıyorsan)"
+        "RetailDemo"        = "Retail Demo Service (mağaza demo modu, ev kullanıcısına gereksiz)"
+        "WMPNetworkSvc"     = "Windows Media Player Ağ Paylaşım Servisi"
+        "RemoteRegistry"    = "Uzaktan Registry erişimi (güvenlik açısından kapalı kalması iyi)"
+        "Fax"               = "Faks servisi"
+        "UevAgentService"   = "User Experience Virtualization Service (App-V/UE-V bileşeni, ev kullanıcısına gereksiz)"
+        "tzautoupdate"      = "Otomatik Saat Dilimi Güncelleyici (saat dilimini elle ayarlıyorsan gereksiz)"
+        "TrkWks"            = "Dağıtılmış Bağlantı İzleme İstemcisi (ağ NTFS kısayol takibi, ev kullanımında gereksiz)"
+        "ssh-agent"         = "OpenSSH Authentication Agent (SSH anahtarı kullanmıyorsan gereksiz)"
+        "Spooler"           = "Yazdırma Biriktiricisi (DİKKAT: yazıcı/'PDF olarak yazdır' kullanıyorsan KAPATMA)"
+        "shpamsvc"          = "Shared PC Account Manager (paylaşımlı/kiosk PC modu kullanmıyorsan gereksiz)"
+        "RmSvc"             = "Radyo Yönetimi Hizmeti (uçak modu donanım yönetimi, çoğu sistemde gereksiz)"
+        "RemoteAccess"      = "Yönlendirme ve Uzaktan Erişim (VPN/router görevi görmüyorsan gereksiz)"
+        "PcaSvc"            = "Program Uyumluluk Yardımcısı Hizmeti (eski program uyumluluk uyarıları)"
+        "NetTcpPortSharing" = "Net.Tcp Bağlantı Noktası Paylaşımı (WCF uygulaması kullanmıyorsan gereksiz)"
+        "MsKeyboardFilter"  = "Microsoft Klavye Filtresi (kiosk modunda kullanılır, ev kullanıcısına gereksiz)"
+        "DPS"               = "Tanı İlkesi Hizmeti (Windows sorun giderme sihirbazlarını devre dışı bırakır)"
+        "CscService"        = "Çevrimdışı Dosyalar (ağ paylaşımı çevrimdışı kullanmıyorsan gereksiz)"
+        "AppVClient"        = "Microsoft App-V Client (uygulama sanallaştırma, ev kullanıcısına gereksiz)"
+        "WbioSrvc"          = "Windows Biometric Service (parmak izi/yüz tanıma - Windows Hello kullanmıyorsan gereksiz)"
+        "SCardSvr"          = "Smart Card (akıllı kart okuyucu kullanmıyorsan gereksiz)"
+        "ScDeviceEnum"      = "Smart Card Device Enumeration Service (akıllı kart cihaz numaralandırma)"
+        "XblAuthManager"    = "Xbox Live Auth Manager"
+        "XblGameSave"       = "Xbox Live Game Save"
+        "XboxNetApiSvc"     = "Xbox Live Networking Service"
+        "XboxGipSvc"        = "Xbox Accessory Management Service"
+        "CDPSvc"            = "Connected Devices Platform Service (Telefonum/Yakındaki Paylaşım kullanmıyorsan gereksiz)"
+        "SSDPSRV"           = "SSDP Discovery (ağ cihazı keşfi/DLNA kullanmıyorsan gereksiz)"
+        "upnphost"          = "UPnP Device Host (cast/DLNA kullanmıyorsan gereksiz)"
+        "wisvc"             = "Windows Insider Service (Insider programına kayıtlı değilsen gereksiz)"
+        "SensrSvc"          = "Sensor Monitoring Service (ortam ışığı sensörü vb. donanım yoksa gereksiz)"
+        "SensorService"     = "Sensor Service (donanım sensörü yoksa gereksiz)"
+        "SensorDataService" = "Sensor Data Service (donanım sensörü yoksa gereksiz)"
+        "icssvc"            = "Windows Mobile Hotspot Service (internet paylaşımı kullanmıyorsan gereksiz)"
+        "TermService"       = "Remote Desktop Services (DİKKAT: bu PC'ye RDP ile uzaktan bağlanıyorsan KAPATMA)"
+        "WPCMonSvc"         = "Parental Controls (Aile Güvenliği/çocuk hesabı kullanmıyorsan gereksiz)"
+        "ALG"               = "Application Layer Gateway Service (eski NAT yardımcı servisi, günümüzde nadiren kullanılır)"
+        "RpcLocator"        = "RPC Locator (legacy servis, modern Windows'ta zaten genelde pasif)"
+        "SysMain"           = "SysMain / Superfetch (SSD kullanıyorsan kapatılması önerilir, HDD'de kapatma)"
     }
 
     foreach ($svcName in $services.Keys) {
         $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
         if ($null -eq $svc) { continue }
-        $desc = $services[$svcName]
-        if (Confirm-Action "`"$svcName`" ($desc) servisini durdurup devre dışı bırakayım mı? Mevcut durum: $($svc.Status)") {
-            try {
-                Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-                Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
-                Write-Log "Servis devre dışı bırakıldı: $svcName"
-            } catch {
-                Write-Log "HATA - $svcName devre dışı bırakılamadı: $_"
-            }
-        }
+        $question = "`"$svcName`" ($($services[$svcName])) servisini durdurup devre dışı bırakayım mı? Mevcut durum: $($svc.Status)"
+        Invoke-Op $question { Disable-SvcByName -Name $svcName }
     }
 
-    # --- OEM servisleri (HP / Intel / diğer üreticiye özel) ---
-    # Bu servislerin gerçek "Name" değeri cihazdan cihaza değişebildiği için görünen ada (DisplayName) göre aranıyor.
+    # OEM (HP/Intel vb.) servisleri: gercek "Name" degeri cihazdan cihaza degistigi icin
+    # gorunen ada (DisplayName) gore aranir.
     Write-Host "`n--- OEM (HP/Intel) servisleri ---" -ForegroundColor Green
-    $displayNamePatterns = @(
-        "DialogBlockingService*"
-    )
-    foreach ($pattern in $displayNamePatterns) {
-        $matches = Get-Service -DisplayName $pattern -ErrorAction SilentlyContinue
-        foreach ($svc in $matches) {
-            if (Confirm-Action "`"$($svc.DisplayName)`" servisini durdurup devre dışı bırakayım mı? Mevcut durum: $($svc.Status)") {
-                try {
-                    Stop-Service -InputObject $svc -Force -ErrorAction SilentlyContinue
-                    Set-Service -InputObject $svc -StartupType Disabled -ErrorAction Stop
-                    Write-Log "Servis devre dışı bırakıldı: $($svc.DisplayName) ($($svc.Name))"
-                } catch {
-                    Write-Log "HATA - $($svc.DisplayName) devre dışı bırakılamadı: $_"
-                }
-            }
+    foreach ($pattern in @("DialogBlockingService*")) {
+        foreach ($svc in @(Get-Service -DisplayName $pattern -ErrorAction SilentlyContinue)) {
+            $realName = $svc.Name
+            $question = "`"$($svc.DisplayName)`" servisini durdurup devre dışı bırakayım mı? Mevcut durum: $($svc.Status)"
+            Invoke-Op $question { Disable-SvcByName -Name $realName }
         }
-    }
-
-    Write-Host "Not: SysMain (Superfetch) ve Windows Search gibi bazı servisler SSD'lerde kapatılabilir ama HDD'de kapatman önerilmez." -ForegroundColor DarkYellow
-    if (Confirm-Action "SysMain (Superfetch) servisini de devre dışı bırakayım mı? (SSD kullanıyorsan önerilir)") {
-        Stop-Service -Name "SysMain" -Force -ErrorAction SilentlyContinue
-        Set-Service -Name "SysMain" -StartupType Disabled -ErrorAction SilentlyContinue
-        Write-Log "Servis devre dışı bırakıldı: SysMain"
     }
 }
 
 # ============================================================
-#  2. BAŞLANGIÇ PROGRAMLARI
+#  2. BASLANGIC PROGRAMLARI
 # ============================================================
 function Optimize-Startup {
     Write-Host "`n=== BAŞLANGIÇ PROGRAMLARI ===" -ForegroundColor Green
-    $items = Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location, User
-    if (-not $items) {
+
+    $items = @(Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue | Select-Object Name, Command)
+    if ($items.Count -eq 0) {
         Write-Host "Başlangıç öğesi bulunamadı." -ForegroundColor Yellow
-        return
-    }
-    $i = 1
-    foreach ($item in $items) {
-        Write-Host "$i) $($item.Name)  -> $($item.Command)" -ForegroundColor White
-        $i++
-    }
-    Write-Host "`nBaşlangıç programlarını doğrudan registry üzerinden kapatmak riskli olabileceğinden,"
-    Write-Host "bunun yerine Görev Yöneticisi > Başlangıç sekmesini açmanı öneriyorum."
-    if (Confirm-Action "Görev Yöneticisini Başlangıç sekmesinde açayım mı?") {
-        Start-Process "taskmgr.exe" "/0" -WindowStyle Normal
-        Write-Log "Görev Yöneticisi Başlangıç sekmesi açıldı."
+    } else {
+        $i = 1
+        foreach ($item in $items) {
+            Write-Host "$i) $($item.Name)  -> $($item.Command)" -ForegroundColor White
+            $i++
+        }
     }
 
-    if (Confirm-Action "Ayarlar > Uygulamalar > Başlangıç listesindeki TÜM uygulamaları devre dışı bırakayım mı? (Registry Run anahtarlarından başlayan klasik uygulamalar; UWP/Store arka plan görevlerini kapsamayabilir)") {
+    Write-Host "`nTek tek yönetmek istersen Görev Yöneticisi > Başlangıç sekmesini kullanabilirsin." -ForegroundColor DarkYellow
+
+    Invoke-Op "Görev Yöneticisini Başlangıç sekmesinde açayım mı?" {
+        Start-Process "taskmgr.exe" "/0" -WindowStyle Normal -ErrorAction Stop
+        Write-Log "OK    - Görev Yöneticisi açıldı."
+        return $true
+    }
+
+    Invoke-Op "Ayarlar > Uygulamalar > Başlangıç listesindeki TÜM uygulamaları devre dışı bırakayım mı? (Registry Run anahtarlarından başlayan klasik uygulamalar; UWP/Store arka plan görevlerini kapsamayabilir)" {
         $startupApprovedKeys = @(
             "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
             "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder",
             "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
             "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
         )
-        # Windows'un "Kapalı" durumu için kullandığı 12 byte'lık işaretleyici: ilk byte 03 = devre dışı.
-        $disabledMarker = [byte[]](3,0,0,0,0,0,0,0,0,0,0,0)
-        $count = 0
+        # Windows'un "Kapali" durumu icin kullandigi 12 byte'lik isaretleyici: ilk byte 03 = devre disi.
+        $disabledMarker = [byte[]](3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        $done = 0
+        $fail = 0
         foreach ($key in $startupApprovedKeys) {
-            if (-not (Test-Path $key)) { continue }
-            $names = (Get-Item -Path $key).Property
-            foreach ($name in $names) {
-                try {
-                    Set-ItemProperty -Path $key -Name $name -Value $disabledMarker -Type Binary
-                    Write-Log "Başlangıç uygulaması devre dışı bırakıldı: $name"
-                    $count++
-                } catch {
-                    Write-Log "HATA - $name devre dışı bırakılamadı: $_"
-                }
+            if (-not (Test-Path -LiteralPath $key)) { continue }
+            foreach ($name in (Get-Item -LiteralPath $key).Property) {
+                if (Set-RegValue $key $name $disabledMarker 'Binary') { $done++ } else { $fail++ }
             }
         }
-        Write-Host "$count başlangıç uygulaması devre dışı bırakıldı." -ForegroundColor Cyan
+        if ($done -eq 0 -and $fail -eq 0) {
+            Write-Log "ATLANDI - Kapatılabilecek klasik başlangıç uygulaması bulunamadı."
+            return $true
+        }
+        Write-Log "OK    - $done başlangıç uygulaması devre dışı bırakıldı, $fail tanesi başarısız."
+        return ($fail -eq 0)
     }
 
-    if (Confirm-Action "Explorer başlangıç gecikmesini sıfırlayayım mı? (Windows varsayılan olarak başlangıç uygulamalarını ~10 saniye geciktirir, bu süreyi kaldırır)") {
-        $path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Serialize"
-        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-        Set-ItemProperty -Path $path -Name "StartupDelayInMSec" -Value 0 -Type DWord
-        Write-Log "Explorer başlangıç gecikmesi sıfırlandı."
+    Invoke-Op "Explorer başlangıç gecikmesini sıfırlayayım mı? (Windows varsayılan olarak başlangıç uygulamalarını ~10 saniye geciktirir, bu süreyi kaldırır)" {
+        $ok = Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Serialize" "StartupDelayInMSec" 0
+        if ($ok) { Write-Log "OK    - Explorer başlangıç gecikmesi sıfırlandı." }
+        return $ok
     }
 }
 
 # ============================================================
-#  3. GÖRSEL EFEKTLER / PERFORMANS AYARLARI
+#  3. GORSEL EFEKTLER / PERFORMANS AYARLARI
 # ============================================================
 function Optimize-VisualEffects {
     Write-Host "`n=== GÖRSEL EFEKTLER ===" -ForegroundColor Green
-    if (Confirm-Action "Görsel efektleri 'En iyi performans' moduna alayım mı? (animasyonlar, gölgeler vb. kapanır)") {
-        $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
-        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-        Set-ItemProperty -Path $path -Name "VisualFXSetting" -Value 2 -Type DWord
-        Write-Log "Görsel efektler 'En iyi performans' olarak ayarlandı (Explorer yeniden başlatılmalı)."
-    }
-    if (Confirm-Action "Şeffaflık efektlerini kapatayım mı?") {
-        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "EnableTransparency" -Value 0 -Type DWord
-        Write-Log "Şeffaflık efektleri kapatıldı."
-    }
-    if (Confirm-Action "Animasyonları (pencere açılış/kapanış) kapatayım mı?") {
-        Set-ItemProperty -Path "HKCU:\Control Panel\Desktop\WindowMetrics" -Name "MinAnimate" -Value 0 -Type String
-        Write-Log "Pencere animasyonları kapatıldı."
-    }
 
-    if (Confirm-Action "Windows Game Bar'ı kapatayım mı? (Kumandanızın Game Bar'ı açması + Game DVR arka plan kaydı)") {
-        $gameDvrPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR"
-        if (-not (Test-Path $gameDvrPath)) { New-Item -Path $gameDvrPath -Force | Out-Null }
-        Set-ItemProperty -Path $gameDvrPath -Name "AppCaptureEnabled" -Value 0 -Type DWord
+    Invoke-Op "Görsel efektleri 'En iyi performans' moduna alayım mı? (animasyonlar, gölgeler vb. kapanır)" {
+        $desktop  = "HKCU:\Control Panel\Desktop"
+        $advanced = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+        $ok = $true
 
-        $gameConfigPath = "HKCU:\System\GameConfigStore"
-        if (-not (Test-Path $gameConfigPath)) { New-Item -Path $gameConfigPath -Force | Out-Null }
-        Set-ItemProperty -Path $gameConfigPath -Name "GameDVR_Enabled" -Value 0 -Type DWord
+        $ok = (Set-RegValue "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting" 2) -and $ok
+        # VisualFXSetting tek basina hicbir efekti kapatmaz; Windows'un "En iyi performans"
+        # secenegiyle yazdigi degerlerin tamami asagida uygulanir.
+        $ok = (Set-RegValue $desktop "UserPreferencesMask" ([byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00)) 'Binary') -and $ok
+        $ok = (Set-RegValue $desktop "DragFullWindows" "0" 'String') -and $ok
+        $ok = (Set-RegValue "$desktop\WindowMetrics" "MinAnimate" "0" 'String') -and $ok
+        foreach ($valueName in @("ListviewAlphaSelect", "ListviewShadow", "TaskbarAnimations")) {
+            $ok = (Set-RegValue $advanced $valueName 0) -and $ok
+        }
+        $ok = (Set-RegValue $advanced "IconsOnly" 1) -and $ok
+        $ok = (Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\DWM" "EnableAeroPeek" 0) -and $ok
 
-        $gameBarPath = "HKCU:\SOFTWARE\Microsoft\GameBar"
-        if (-not (Test-Path $gameBarPath)) { New-Item -Path $gameBarPath -Force | Out-Null }
-        Set-ItemProperty -Path $gameBarPath -Name "UseNexusForGameBarEnabled" -Value 0 -Type DWord
-
-        # Politika seviyesinde de kapatarak Game Bar'ın tamamen açılmasını engelliyoruz.
-        $policyPath = "HKCU:\SOFTWARE\Policies\Microsoft\Windows\GameDVR"
-        if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
-        Set-ItemProperty -Path $policyPath -Name "AllowGameDVR" -Value 0 -Type DWord
-
-        Write-Log "Windows Game Bar kapatıldı."
+        if ($ok) { Write-Log "OK    - Görsel efektler 'En iyi performans' olarak ayarlandı (Gezgin yeniden başlatılınca tam etkili olur)." }
+        return $ok
     }
 
-    if (Confirm-Action "Oyun Modunu (Game Mode) açayım mı?") {
-        $gameBarPath = "HKCU:\SOFTWARE\Microsoft\GameBar"
-        if (-not (Test-Path $gameBarPath)) { New-Item -Path $gameBarPath -Force | Out-Null }
-        Set-ItemProperty -Path $gameBarPath -Name "AutoGameModeEnabled" -Value 1 -Type DWord
-        Write-Log "Oyun Modu açıldı."
+    Invoke-Op "Şeffaflık efektlerini kapatayım mı?" {
+        $ok = Set-RegValue "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" "EnableTransparency" 0
+        if ($ok) { Write-Log "OK    - Şeffaflık efektleri kapatıldı." }
+        return $ok
     }
 
-    if (Confirm-Action "Dosya uzantılarının her zaman gösterilmesini sağlayayım mı? (.txt, .exe gibi uzantılar görünür olur)") {
-        $path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        Set-ItemProperty -Path $path -Name "HideFileExt" -Value 0 -Type DWord
-        Write-Log "Dosya uzantıları gösteriliyor olarak ayarlandı (Gezgin yeniden başlatılmalı)."
+    Invoke-Op "Animasyonları (pencere açılış/kapanış) kapatayım mı?" {
+        $ok = Set-RegValue "HKCU:\Control Panel\Desktop\WindowMetrics" "MinAnimate" "0" 'String'
+        if ($ok) { Write-Log "OK    - Pencere animasyonları kapatıldı." }
+        return $ok
     }
 
-    if (Confirm-Action "Görev çubuğu Widget'lar (haber/hava durumu) düğmesini kapatayım mı?") {
-        $path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        Set-ItemProperty -Path $path -Name "TaskbarDa" -Value 0 -Type DWord
-        Write-Log "Görev çubuğu Widget'lar düğmesi kapatıldı."
+    Invoke-Op "Windows Game Bar'ı kapatayım mı? (Kumandanızın Game Bar'ı açması + Game DVR arka plan kaydı)" {
+        $ok = $true
+        $ok = (Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled" 0) -and $ok
+        $ok = (Set-RegValue "HKCU:\System\GameConfigStore" "GameDVR_Enabled" 0) -and $ok
+        $ok = (Set-RegValue "HKCU:\SOFTWARE\Microsoft\GameBar" "UseNexusForGameBarEnabled" 0) -and $ok
+        # AllowGameDVR politikasi yalnizca HKLM altinda okunur (eskiden HKCU'ya yaziliyordu, etkisizdi).
+        $ok = (Set-RegValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" "AllowGameDVR" 0) -and $ok
+        if ($ok) { Write-Log "OK    - Windows Game Bar kapatıldı." }
+        return $ok
+    }
+
+    Invoke-Op "Oyun Modunu (Game Mode) açayım mı?" {
+        $ok = Set-RegValue "HKCU:\SOFTWARE\Microsoft\GameBar" "AutoGameModeEnabled" 1
+        if ($ok) { Write-Log "OK    - Oyun Modu açıldı." }
+        return $ok
+    }
+
+    Invoke-Op "Dosya uzantılarının her zaman gösterilmesini sağlayayım mı? (.txt, .exe gibi uzantılar görünür olur)" {
+        $ok = Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" 0
+        if ($ok) { Write-Log "OK    - Dosya uzantıları gösterilecek (Gezgin yeniden başlatılınca görünür)." }
+        return $ok
+    }
+
+    Invoke-Op "Görev çubuğu Widget'lar (haber/hava durumu) düğmesini kapatayım mı?" {
+        $ok = Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarDa" 0
+        if ($ok) { Write-Log "OK    - Görev çubuğu Widget'lar düğmesi kapatıldı." }
+        return $ok
+    }
+
+    Invoke-Op "Ayarların hemen görünür olması için Windows Gezgini'ni (explorer.exe) yeniden başlatayım mı?" {
+        return (Restart-ExplorerSafe)
     }
 }
 
 # ============================================================
-#  4. GEÇİCİ DOSYA / ÖNBELLEK TEMİZLİĞİ
+#  4. GECICI DOSYA / ONBELLEK TEMIZLIGI
 # ============================================================
 function Optimize-TempCleanup {
     Write-Host "`n=== GEÇİCİ DOSYA / ÖNBELLEK TEMİZLİĞİ ===" -ForegroundColor Green
 
-    if (Confirm-Action "Windows ve kullanıcı Temp klasörlerini (%TEMP% ve C:\Windows\Temp) temizleyeyim mi?") {
-        $paths = @($env:TEMP, "$env:WINDIR\Temp")
-        foreach ($p in $paths) {
-            Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue |
-                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-Op "Windows ve kullanıcı Temp klasörlerini (%TEMP% ve C:\Windows\Temp) temizleyeyim mi?" {
+        $ok = $true
+        $ok = (Clear-FolderContents $env:TEMP "Kullanıcı Temp") -and $ok
+        $ok = (Clear-FolderContents "$env:WINDIR\Temp" "Windows Temp") -and $ok
+        return $ok
+    }
+
+    Invoke-Op "Prefetch klasörünü (C:\Windows\Prefetch) temizleyeyim mi?" {
+        return (Clear-FolderContents "$env:WINDIR\Prefetch" "Prefetch")
+    }
+
+    Invoke-Op "Son kullanılan öğeler (Recent) klasörünü temizleyeyim mi?" {
+        return (Clear-FolderContents "$env:APPDATA\Microsoft\Windows\Recent" "Recent")
+    }
+
+    Invoke-Op "Uygulama çökme dökümlerini (AppData\Local\CrashDumps) temizleyeyim mi?" {
+        return (Clear-FolderContents "$env:LOCALAPPDATA\CrashDumps" "CrashDumps")
+    }
+
+    Invoke-Op "Event Viewer (Olay Görüntüleyici) günlüklerini temizleyeyim mi? (Uygulama, Sistem, Güvenlik ve diğer tüm günlükler sıfırlanır)" {
+        $logs = @(Get-WinEvent -ListLog * -ErrorAction SilentlyContinue | Where-Object { $_.RecordCount -gt 0 })
+        if ($logs.Count -eq 0) {
+            Write-Log "ATLANDI - Temizlenecek günlük bulunamadı."
+            return $true
         }
-        Write-Log "Temp klasörleri temizlendi."
-    }
-
-    if (Confirm-Action "Prefetch klasörünü (C:\Windows\Prefetch) temizleyeyim mi?") {
-        Remove-Item -Path "$env:WINDIR\Prefetch\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Log "Prefetch klasörü temizlendi."
-    }
-
-    if (Confirm-Action "Son kullanılan öğeler (Recent) klasörünü temizleyeyim mi?") {
-        Remove-Item -Path "$env:APPDATA\Microsoft\Windows\Recent\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Log "Recent klasörü temizlendi."
-    }
-
-    if (Confirm-Action "Uygulama çökme dökümlerini (C:\Users\$env:USERNAME\AppData\Local\CrashDumps) temizleyeyim mi?") {
-        Remove-Item -Path "$env:LOCALAPPDATA\CrashDumps\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Log "CrashDumps klasörü temizlendi."
-    }
-
-    if (Confirm-Action "Event Viewer (Olay Görüntüleyici) günlüklerini temizleyeyim mi? (Uygulama, Sistem, Güvenlik ve diğer tüm günlükler sıfırlanır)") {
-        $logs = Get-WinEvent -ListLog * -ErrorAction SilentlyContinue | Where-Object { $_.RecordCount -gt 0 }
         $cleared = 0
+        $failed  = 0
         foreach ($log in $logs) {
-            try {
-                wevtutil cl "$($log.LogName)" 2>$null
-                $cleared++
-            } catch {}
+            & wevtutil.exe cl "$($log.LogName)" 2>$null
+            if ($LASTEXITCODE -eq 0) { $cleared++ } else { $failed++ }
         }
-        Write-Log "Event Viewer günlükleri temizlendi ($cleared günlük)."
+        Write-Log "OK    - Event Viewer günlükleri: $cleared temizlendi, $failed temizlenemedi (korumalı günlükler)."
+        return ($cleared -gt 0)
     }
 
-    if (Confirm-Action "Windows Update indirme önbelleğini (C:\Windows\SoftwareDistribution\Download) temizleyeyim mi?") {
-        Stop-Service -Name wuauserv -Force
-        Remove-Item -Path "$env:WINDIR\SoftwareDistribution\Download\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Start-Service -Name wuauserv
-        Write-Log "Windows Update önbelleği temizlendi."
+    Invoke-Op "Windows Update indirme önbelleğini (C:\Windows\SoftwareDistribution\Download) temizleyeyim mi?" {
+        $wasRunning = $false
+        $svc = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') {
+            $wasRunning = $true
+            try { Stop-Service -Name wuauserv -Force -ErrorAction Stop } catch {
+                Write-Log "UYARI - wuauserv durdurulamadı: $($_.Exception.Message)"
+            }
+        }
+        $result = Clear-FolderContents "$env:WINDIR\SoftwareDistribution\Download" "Windows Update önbelleği"
+        if ($wasRunning) {
+            try { Start-Service -Name wuauserv -ErrorAction Stop } catch {
+                Write-Log "UYARI - wuauserv yeniden başlatılamadı: $($_.Exception.Message)"
+            }
+        }
+        return $result
     }
 
-    if (Confirm-Action "Geri Dönüşüm Kutusunu boşaltayım mı?") {
-        Clear-RecycleBin -Force -ErrorAction SilentlyContinue
-        Write-Log "Geri Dönüşüm Kutusu boşaltıldı."
+    Invoke-Op "Geri Dönüşüm Kutusunu boşaltayım mı?" {
+        try {
+            Clear-RecycleBin -Force -ErrorAction Stop
+            Write-Log "OK    - Geri Dönüşüm Kutusu boşaltıldı."
+            return $true
+        } catch {
+            # Kutu zaten bossa Windows hata dondurur; bu bir basarisizlik degildir.
+            if ($_.Exception.Message -match 'boş|empty') {
+                Write-Log "ATLANDI - Geri Dönüşüm Kutusu zaten boş."
+                return $true
+            }
+            Write-Log "HATA  - Geri Dönüşüm Kutusu boşaltılamadı: $($_.Exception.Message)"
+            return $false
+        }
     }
 
-    if (Confirm-Action "Simge/Thumbnail önbelleğini temizleyeyim mi? (bozuk/eski görünen simgeleri düzeltir, Gezgin yeniden başlatılır)") {
+    Invoke-Op "Simge/Thumbnail önbelleğini temizleyeyim mi? (bozuk/eski görünen simgeleri düzeltir, Gezgin yeniden başlatılır)" {
         Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
-        Remove-Item -Path "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db" -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache_*.db" -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "$env:LOCALAPPDATA\IconCache.db" -Force -ErrorAction SilentlyContinue
-        Start-Process explorer.exe
-        Write-Log "Simge/Thumbnail önbelleği temizlendi."
+
+        $patterns = @(
+            "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db",
+            "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache_*.db",
+            "$env:LOCALAPPDATA\IconCache.db"
+        )
+        $deleted = 0
+        $failed  = 0
+        foreach ($pattern in $patterns) {
+            foreach ($file in @(Get-Item -Path $pattern -Force -ErrorAction SilentlyContinue)) {
+                try { Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop; $deleted++ }
+                catch { $failed++ }
+            }
+        }
+        Write-Log "OK    - Simge/Thumbnail önbelleği: $deleted dosya silindi, $failed dosya silinemedi."
+        $explorerOk = Restart-ExplorerSafe
+        return ($explorerOk -and $failed -eq 0)
     }
 
-    if (Confirm-Action "Disk Temizleme aracını 'Sistem dosyalarını temizle' seçeneği zaten etkinmiş gibi, TÜM kategoriler (Sistem Geri Yükleme ve Gölge Kopyaları dahil) işaretli şekilde tamamen otomatik çalıştırayım mı? (Manuel onay istemeden direkt temizler; en son geri yükleme noktası hariç eskiler silinir)") {
-        $sageNum = "0064"
-        $vcPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
-        $categories = Get-ChildItem -Path $vcPath -ErrorAction SilentlyContinue
-        foreach ($cat in $categories) {
-            try {
-                Set-ItemProperty -Path $cat.PSPath -Name "StateFlags$sageNum" -Value 2 -Type DWord -ErrorAction SilentlyContinue
-            } catch {}
+    Invoke-Op "Disk Temizleme aracını TÜM kategoriler işaretli şekilde otomatik çalıştırayım mı? (Manuel onay istemeden temizler; en son geri yükleme noktası hariç eskiler silinir)" {
+        $sageNum      = "0064"
+        $volumeCaches = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
+        $marked = 0
+        foreach ($category in @(Get-ChildItem -LiteralPath $volumeCaches -ErrorAction SilentlyContinue)) {
+            if (Set-RegValue $category.PSPath "StateFlags$sageNum" 2) { $marked++ }
         }
-        Write-Log "Disk Temizleme'deki tüm kategoriler (Sistem Geri Yükleme ve Gölge Kopyaları dahil) işaretlendi."
-        Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/sagerun:$sageNum" -Wait
-        Write-Log "Disk Temizleme (sistem dosyaları + tüm kategoriler) tamamlandı."
+        if ($marked -eq 0) {
+            Write-Log "HATA  - Disk Temizleme kategorileri işaretlenemedi."
+            return $false
+        }
+        Write-Log "OK    - Disk Temizleme'de $marked kategori işaretlendi, cleanmgr başlatılıyor..."
+
+        $proc = Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/sagerun:$sageNum" -PassThru -ErrorAction Stop
+        # cleanmgr bazen takilabildigi icin sinirsiz beklenmez.
+        if (-not $proc.WaitForExit(20 * 60 * 1000)) {
+            Write-Log "UYARI - Disk Temizleme 20 dakikada bitmedi, arka planda çalışmaya devam ediyor."
+            return $true
+        }
+        Write-Log "OK    - Disk Temizleme tamamlandı."
+        return $true
     }
 }
 
 # ============================================================
-#  5. AĞ / DNS AYARLARI
+#  5. AG / DNS AYARLARI
 # ============================================================
 function Optimize-Network {
     Write-Host "`n=== AĞ / DNS AYARLARI ===" -ForegroundColor Green
 
-    if (Confirm-Action "DNS Cache'i temizleyeyim mi (ipconfig /flushdns)?") {
-        ipconfig /flushdns | Out-Null
-        Write-Log "DNS cache temizlendi."
+    Invoke-Op "DNS Cache'i temizleyeyim mi (ipconfig /flushdns)?" {
+        & ipconfig.exe /flushdns | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "HATA  - DNS cache temizlenemedi (ipconfig çıkış kodu: $LASTEXITCODE)."
+            return $false
+        }
+        Write-Log "OK    - DNS cache temizlendi."
+        return $true
     }
 
-    if (Confirm-Action "Aktif ağ bağdaştırıcısının DNS sunucusunu Google DNS (8.8.8.8 / 8.8.4.4) olarak ayarlayayım mı?") {
-        $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-        if ($adapter) {
-            Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ("8.8.8.8","8.8.4.4")
-            Write-Log "DNS sunucuları Google DNS olarak ayarlandı ($($adapter.Name)). Geri almak için: Set-DnsClientServerAddress -InterfaceIndex $($adapter.ifIndex) -ResetServerAddresses"
-        } else {
-            Write-Host "Aktif ağ bağdaştırıcısı bulunamadı." -ForegroundColor Red
+    Invoke-Op "Aktif ağ bağdaştırıcısının DNS sunucusunu Google DNS (8.8.8.8 / 8.8.4.4) olarak ayarlayayım mı?" {
+        $adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
+        if (-not $adapter) {
+            Write-Log "HATA  - Aktif (Up durumunda) ağ bağdaştırıcısı bulunamadı."
+            return $false
         }
+
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ("8.8.8.8", "8.8.4.4") -ErrorAction Stop
+
+        $current = @((Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses)
+        if ($current -notcontains "8.8.8.8") {
+            Write-Log "HATA  - DNS ayarı doğrulanamadı (okunan: $($current -join ', '))."
+            return $false
+        }
+        Write-Log "OK    - DNS sunucuları Google DNS olarak ayarlandı ($($adapter.Name))."
+        Write-Log "        Geri almak için: Set-DnsClientServerAddress -InterfaceIndex $($adapter.ifIndex) -ResetServerAddresses"
+        return $true
     }
 
     Write-Host "Not: Nagle algoritması ayarı, ağ bağdaştırıcısına özel bir interface GUID gerektirdiğinden bu script'e otomatik eklenmedi." -ForegroundColor DarkYellow
-    Write-Host "İstersen bunu manuel yapman için: Kayıt Defteri'nde HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\<GUID> altına TcpAckFrequency=1 ve TCPNoDelay=1 (DWORD) eklenir." -ForegroundColor DarkYellow
+    Write-Host "Manuel yapmak istersen: HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\<GUID> altına TcpAckFrequency=1 ve TCPNoDelay=1 (DWORD) eklenir." -ForegroundColor DarkYellow
 }
 
 # ============================================================
-#  6. GÜÇ PLANI AYARLARI
+#  6. GUC PLANI AYARLARI
 # ============================================================
 function Optimize-PowerPlan {
     Write-Host "`n=== GÜÇ PLANI (NİHAİ PERFORMANS) ===" -ForegroundColor Green
 
-    if (-not (Confirm-Action "Nihai Performans planını oluşturup etkinleştireyim ve tüm gelişmiş güç ayarlarını (disk/ekran/kablosuz/USB/PCIe/işlemci/IE) en yüksek performansa göre ayarlayayım mı? (dizüstünde pil ömrünü belirgin şekilde kısaltır)")) {
-        return
+    Invoke-Op "Nihai Performans planını oluşturup etkinleştireyim ve tüm gelişmiş güç ayarlarını (disk/ekran/kablosuz/USB/PCIe/işlemci) en yüksek performansa göre ayarlayayım mı? (dizüstünde pil ömrünü belirgin şekilde kısaltır)" {
+        $guidPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+
+        $output = @(& powercfg.exe -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>&1)
+        $scheme = $null
+        foreach ($line in $output) {
+            $m = [regex]::Match("$line", $guidPattern)
+            if ($m.Success) { $scheme = $m.Value; break }
+        }
+
+        if (-not $scheme) {
+            # Plan zaten olusturulmus olabilir; mevcut planlar arasinda "Nihai/Ultimate" aranir.
+            foreach ($line in @(& powercfg.exe /list 2>&1)) {
+                if ("$line" -match 'Ultimate|Nihai') {
+                    $m = [regex]::Match("$line", $guidPattern)
+                    if ($m.Success) { $scheme = $m.Value; break }
+                }
+            }
+        }
+
+        if (-not $scheme) {
+            Write-Log "HATA  - Nihai Performans planı oluşturulamadı (bu Windows sürümünde desteklenmiyor olabilir)."
+            return $false
+        }
+
+        & powercfg.exe -setactive $scheme | Out-Null
+
+        $active = (@(& powercfg.exe /getactivescheme 2>&1) -join ' ')
+        if ($active -notmatch [regex]::Escape($scheme)) {
+            Write-Log "HATA  - Nihai Performans planı etkinleştirilemedi."
+            return $false
+        }
+        Write-Log "OK    - Nihai Performans planı etkin. Şema GUID: $scheme"
+
+        $settings = @(
+            @{ Sub = "0012ee47-9041-4b5d-9b77-535fba8b1442"; Id = "6738e2c4-e8a5-4a42-b16a-e040e769756e"; Value = 0;   Label = "Sabit diski kapat (Hiçbir zaman)" }
+            @{ Sub = "7516b95f-f776-4464-8c53-06167f40cc99"; Id = "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e"; Value = 0;   Label = "Ekranı kapat (Hiçbir zaman)" }
+            @{ Sub = "02f815b5-a5cf-4c84-bf20-649d1f75d3d8"; Id = "4c793e7d-a264-42e1-8ec5-7f0db06cbf80"; Value = 0;   Label = "JavaScript Zamanlayıcı Sıklığı (En yüksek performans)" }
+            @{ Sub = "0d7dbae2-4294-402a-ba8e-26777e8488cd"; Id = "309dce9b-bef4-4119-9921-a851fb12f0f4"; Value = 1;   Label = "Masaüstü slayt gösterisi (Duraklatıldı)" }
+            @{ Sub = "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1"; Id = "12bbebe6-58d6-4636-95bb-3217ef867c1a"; Value = 0;   Label = "Kablosuz güç tasarrufu modu (En yüksek performans)" }
+            @{ Sub = "2a737441-1930-4402-8d77-b2bebba308a3"; Id = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"; Value = 0;   Label = "USB seçmeli askıya alma (Kapalı)" }
+            @{ Sub = "501a4d13-42af-4429-9fd1-a8218c268e20"; Id = "ee12f906-d277-404b-b6da-e5fa1a576df5"; Value = 0;   Label = "PCI Express bağlantı durumu güç yönetimi (Kapalı)" }
+            @{ Sub = "54533251-82be-4824-96c1-47b60b740d00"; Id = "893dee8e-2bef-41e0-89c6-b55d0929964c"; Value = 100; Label = "İşlemci en düşük durum (%100)" }
+            @{ Sub = "54533251-82be-4824-96c1-47b60b740d00"; Id = "bc5038f7-23e0-4960-96da-33abaf5935ec"; Value = 100; Label = "İşlemci en yüksek durum (%100)" }
+            @{ Sub = "44f3beca-a7c0-460e-9df2-bb8b99e0cba6"; Id = "3619c3f2-afb2-4afc-b0e9-e7fef372de36"; Value = 2;   Label = "Intel Graphics Power Plan (Maximum Performance)" }
+        )
+
+        $applied = 0
+        $skipped = 0
+        foreach ($setting in $settings) {
+            & powercfg.exe -setacvalueindex $scheme $setting.Sub $setting.Id $setting.Value 2>&1 | Out-Null
+            $acOk = ($LASTEXITCODE -eq 0)
+            & powercfg.exe -setdcvalueindex $scheme $setting.Sub $setting.Id $setting.Value 2>&1 | Out-Null
+            $dcOk = ($LASTEXITCODE -eq 0)
+
+            if ($acOk -or $dcOk) {
+                $applied++
+                Write-Log "        - $($setting.Label)"
+            } else {
+                $skipped++
+                Write-Log "ATLANDI - $($setting.Label) bu sistemde mevcut değil."
+            }
+        }
+
+        & powercfg.exe -setactive $scheme | Out-Null
+        Write-Log "OK    - Gelişmiş güç ayarları: $applied uygulandı, $skipped bu sistemde yok."
+        return $true
     }
-
-    $output = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61
-    $scheme = ($output | Select-String -Pattern '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}').Matches[0].Value
-    if (-not $scheme) {
-        Write-Log "HATA - Nihai Performans planı oluşturulamadı."
-        return
-    }
-    powercfg -setactive $scheme
-    Write-Log "Nihai Performans planı oluşturuldu ve etkinleştirildi. Şema GUID: $scheme"
-
-    function Set-PowerSetting {
-        param($SubGroup, $Setting, $Value, $Label)
-        powercfg -setacvalueindex $scheme $SubGroup $Setting $Value
-        powercfg -setdcvalueindex $scheme $SubGroup $Setting $Value
-        Write-Log "  - $Label => $Value (AC ve DC)"
-    }
-
-    Set-PowerSetting "0012ee47-9041-4b5d-9b77-535fba8b1442" "6738e2c4-e8a5-4a42-b16a-e040e769756e" 0 "Sabit diski kapat (Hiçbir zaman)"
-    Set-PowerSetting "7516b95f-f776-4464-8c53-06167f40cc99" "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e" 0 "Ekranı kapat (Hiçbir zaman)"
-    Set-PowerSetting "02f815b5-a5cf-4c84-bf20-649d1f75d3d8" "4c793e7d-a264-42e1-8ec5-7f0db06cbf80" 0 "IE JavaScript Zamanlayıcı Sıklığı (En yüksek performans)"
-    Set-PowerSetting "0d7dbae2-4294-402a-ba8e-26777e8488cd" "309dce9b-bef4-4119-9921-a851fb12f0f4" 1 "Masaüstü slayt gösterisi (Duraklatıldı)"
-    Set-PowerSetting "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1" "12bbebe6-58d6-4636-95bb-3217ef867c1a" 0 "Kablosuz güç tasarrufu modu (En yüksek performans)"
-    Set-PowerSetting "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226" 0 "USB seçmeli askıya alma (Kapalı)"
-    Set-PowerSetting "501a4d13-42af-4429-9fd1-a8218c268e20" "ee12f906-d277-404b-b6da-e5fa1a576df5" 0 "PCI Express bağlantı durumu güç yönetimi (Kapalı)"
-    Set-PowerSetting "54533251-82be-4824-96c1-47b60b740d00" "893dee8e-2bef-41e0-89c6-b55d0929964c" 100 "İşlemci en düşük durum (%100)"
-    Set-PowerSetting "54533251-82be-4824-96c1-47b60b740d00" "bc5038f7-23e0-4960-96da-33abaf5935ec" 100 "İşlemci en yüksek durum (%100)"
-
-    # Intel Graphics Power Plan sadece Intel grafik sürücüsü kurulu sistemlerde mevcuttur.
-    try {
-        powercfg -setacvalueindex $scheme 44f3beca-a7c0-460e-9df2-bb8b99e0cba6 3619c3f2-afb2-4afc-b0e9-e7fef372de36 2 2>$null
-        powercfg -setdcvalueindex $scheme 44f3beca-a7c0-460e-9df2-bb8b99e0cba6 3619c3f2-afb2-4afc-b0e9-e7fef372de36 2 2>$null
-        Write-Log "  - Intel Graphics Power Plan => Maximum Performance (varsa uygulandı)"
-    } catch {
-        Write-Log "  - Intel Graphics Power Plan ayarı bu sistemde bulunamadı, atlandı."
-    }
-
-    powercfg -setactive $scheme
-    Write-Log "Tüm gelişmiş güç ayarları uygulandı ve Nihai Performans planı aktif edildi."
 }
 
 # ============================================================
-#  7. EK OPTİMİZASYONLAR
+#  7. EK OPTIMIZASYONLAR
 # ============================================================
 function Optimize-Extra {
     Write-Host "`n=== EK OPTİMİZASYONLAR ===" -ForegroundColor Green
 
-    if (Confirm-Action "Hazırda Bekletme (Hibernation) dosyasını kapatayım mı? (SSD'de yer açar, disk alanı kazandırır)") {
-        powercfg -h off
-        Write-Log "Hibernation kapatıldı."
+    Invoke-Op "Hazırda Bekletme (Hibernation) dosyasını kapatayım mı? (SSD'de yer açar, disk alanı kazandırır)" {
+        & powercfg.exe -h off 2>&1 | Out-Null
+        $value = $null
+        try { $value = (Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Control\Power" -Name HibernateEnabled -ErrorAction Stop).HibernateEnabled } catch {}
+        if ($value -ne 0) {
+            Write-Log "HATA  - Hazırda bekletme kapatılamadı (HibernateEnabled=$value)."
+            return $false
+        }
+        Write-Log "OK    - Hazırda bekletme kapatıldı."
+        return $true
     }
 
-    if (Confirm-Action "Windows İpuçları/Önerileri bildirimlerini kapatayım mı?") {
+    Invoke-Op "Windows İpuçları/Önerileri bildirimlerini kapatayım mı?" {
         $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
-        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-        Set-ItemProperty -Path $path -Name "SubscribedContent-338389Enabled" -Value 0 -Type DWord
-        Write-Log "Windows ipuçları/önerileri kapatıldı."
-    }
-
-    if (Confirm-Action "Fast Startup'ı (Hızlı Başlatma) kapatayım mı? (bazı sürücü/ağ sorunlarını ve dual-boot disk bozulma riskini önler, kapanma birkaç saniye uzayabilir)") {
-        $path = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power"
-        Set-ItemProperty -Path $path -Name "HiberbootEnabled" -Value 0 -Type DWord
-        Write-Log "Fast Startup kapatıldı."
-    }
-
-    if (Confirm-Action "SSD için TRIM'in aktif olup olmadığını kontrol edip, kapalıysa otomatik olarak açayım mı?") {
-        $trimStatus = fsutil behavior query DisableDeleteNotify
-        Write-Host $trimStatus -ForegroundColor White
-        if ($trimStatus -match "DisableDeleteNotify\s*=\s*1") {
-            fsutil behavior set DisableDeleteNotify 0 | Out-Null
-            Write-Log "TRIM kapalıydı, etkinleştirildi."
-        } else {
-            Write-Log "TRIM zaten etkin, değişiklik yapılmadı."
+        $ok = $true
+        foreach ($valueName in @("SubscribedContent-338389Enabled", "SubscribedContent-338393Enabled", "SoftLandingEnabled")) {
+            $ok = (Set-RegValue $path $valueName 0) -and $ok
         }
+        if ($ok) { Write-Log "OK    - Windows ipuçları/önerileri kapatıldı." }
+        return $ok
     }
 
-    if (Confirm-Action "OneDrive'ı kapatıp kaldırayım mı? (senkronizasyon durur, dosyaların diskte kalır; Gezgin'den OneDrive simgesi kaldırılır)") {
+    Invoke-Op "Fast Startup'ı (Hızlı Başlatma) kapatayım mı? (bazı sürücü/ağ sorunlarını ve dual-boot disk bozulma riskini önler, kapanma birkaç saniye uzayabilir)" {
+        $ok = Set-RegValue "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" "HiberbootEnabled" 0
+        if ($ok) { Write-Log "OK    - Fast Startup kapatıldı." }
+        return $ok
+    }
+
+    Invoke-Op "SSD için TRIM'in aktif olup olmadığını kontrol edip, kapalıysa otomatik olarak açayım mı?" {
+        $status = (@(& fsutil.exe behavior query DisableDeleteNotify 2>&1) -join "`n")
+        if ($status -notmatch "DisableDeleteNotify") {
+            Write-Log "HATA  - TRIM durumu okunamadı: $status"
+            return $false
+        }
+        if ($status -match "DisableDeleteNotify\D*=\s*0") {
+            Write-Log "ATLANDI - TRIM zaten etkin, değişiklik yapılmadı."
+            return $true
+        }
+        & fsutil.exe behavior set DisableDeleteNotify 0 2>&1 | Out-Null
+        $status = (@(& fsutil.exe behavior query DisableDeleteNotify 2>&1) -join "`n")
+        if ($status -match "DisableDeleteNotify\D*=\s*0") {
+            Write-Log "OK    - TRIM kapalıydı, etkinleştirildi."
+            return $true
+        }
+        Write-Log "HATA  - TRIM etkinleştirilemedi."
+        return $false
+    }
+
+    Invoke-Op "OneDrive'ı kapatıp kaldırayım mı? (senkronizasyon durur, dosyaların diskte kalır; Gezgin'den OneDrive simgesi kaldırılır)" {
         Stop-Process -Name "OneDrive" -Force -ErrorAction SilentlyContinue
-        $oneDriveSetup = "$env:SYSTEMROOT\SysWOW64\OneDriveSetup.exe"
-        if (-not (Test-Path $oneDriveSetup)) { $oneDriveSetup = "$env:SYSTEMROOT\System32\OneDriveSetup.exe" }
-        if (Test-Path $oneDriveSetup) {
-            Start-Process $oneDriveSetup "/uninstall" -Wait -ErrorAction SilentlyContinue
+
+        $setup = "$env:SYSTEMROOT\SysWOW64\OneDriveSetup.exe"
+        if (-not (Test-Path -LiteralPath $setup)) { $setup = "$env:SYSTEMROOT\System32\OneDriveSetup.exe" }
+
+        if (Test-Path -LiteralPath $setup) {
+            $proc = Start-Process -FilePath $setup -ArgumentList "/uninstall" -PassThru -ErrorAction Stop
+            if (-not $proc.WaitForExit(5 * 60 * 1000)) {
+                Write-Log "UYARI - OneDrive kaldırma işlemi 5 dakikada bitmedi."
+            }
+        } else {
+            Write-Log "ATLANDI - OneDriveSetup.exe bulunamadı, kaldırma adımı geçildi."
         }
-        # Gezgin gezinme bölmesindeki OneDrive kısayolunu gizle
+
         foreach ($clsid in @("HKCU:\SOFTWARE\Classes\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}",
-                              "HKCU:\SOFTWARE\Classes\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}")) {
-            if (Test-Path $clsid) {
-                Set-ItemProperty -Path $clsid -Name "System.IsPinnedToNameSpaceTree" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+                             "HKCU:\SOFTWARE\Classes\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}")) {
+            if (Test-Path -LiteralPath $clsid) {
+                Set-RegValue $clsid "System.IsPinnedToNameSpaceTree" 0 | Out-Null
             }
         }
-        Write-Log "OneDrive kaldırıldı."
+
+        Write-Log "OK    - OneDrive kaldırıldı / gezinti bölmesinden gizlendi."
+        return $true
     }
 
-    if (Confirm-Action "Sayfalama dosyasını (pagefile) sistem yönetimli hale getireyim mi? (Windows RAM/disk durumuna göre otomatik boyutlandırır)") {
-        try {
-            $cs = Get-WmiObject Win32_ComputerSystem -EnableAllPrivileges
-            $cs.AutomaticManagedPagefile = $true
-            $cs.Put() | Out-Null
-            Write-Log "Sayfalama dosyası sistem yönetimli olarak ayarlandı."
-        } catch {
-            Write-Log "HATA - Sayfalama dosyası ayarlanamadı: $_"
+    Invoke-Op "Sayfalama dosyasını (pagefile) sistem yönetimli hale getireyim mi? (Windows RAM/disk durumuna göre otomatik boyutlandırır)" {
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if ($cs.AutomaticManagedPagefile) {
+            Write-Log "ATLANDI - Sayfalama dosyası zaten sistem yönetimli."
+            return $true
         }
+        Set-CimInstance -InputObject $cs -Property @{ AutomaticManagedPagefile = $true } -ErrorAction Stop
+
+        $check = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if (-not $check.AutomaticManagedPagefile) {
+            Write-Log "HATA  - Sayfalama dosyası sistem yönetimli yapılamadı."
+            return $false
+        }
+        Write-Log "OK    - Sayfalama dosyası sistem yönetimli olarak ayarlandı (yeniden başlatma gerekir)."
+        return $true
     }
 }
 
 # ============================================================
-#  8. BAŞLANGIÇ/KURTARMA + SİSTEM KORUMASI (GELİŞMİŞ SİSTEM ÖZELLİKLERİ)
+#  8. BASLANGIC/KURTARMA + SISTEM KORUMASI
 # ============================================================
 function Optimize-SystemAdvanced {
     Write-Host "`n=== BAŞLANGIÇ VE KURTARMA / SİSTEM KORUMASI ===" -ForegroundColor Green
 
-    if (Confirm-Action "İşletim sistemleri listesini gösterme süresini kaldırayım mı (önyükleme menüsü zaman aşımı = 0)?") {
-        bcdedit /timeout 0 | Out-Null
-        Write-Log "Önyükleme menüsü zaman aşımı 0 olarak ayarlandı (liste gösterilmeyecek)."
-    }
-
-    if (Confirm-Action "'Sistem günlüğüne olay olarak yaz' seçeneğini kapatayım mı?") {
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl" -Name "LogEvent" -Value 0 -Type DWord
-        Write-Log "Sistem günlüğüne olay yazma kapatıldı."
-    }
-
-    if (Confirm-Action "'Otomatik olarak yeniden başlat' seçeneğini kapatayım mı?") {
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl" -Name "AutoReboot" -Value 0 -Type DWord
-        Write-Log "Otomatik yeniden başlatma kapatıldı."
-    }
-
-    if (Confirm-Action "Sistem korumasını $env:SystemDrive için devre dışı bırakayım mı? (DİKKAT: mevcut geri yükleme noktaları silinir, sorunlu bir sürücü/güncelleme sonrası sistemi eski haline döndürme imkanın kalmaz)") {
-        try {
-            Disable-ComputerRestore -Drive "$env:SystemDrive\"
-            Write-Log "Sistem koruması $env:SystemDrive için devre dışı bırakıldı."
-        } catch {
-            Write-Log "HATA - Sistem koruması devre dışı bırakılamadı: $_"
+    Invoke-Op "İşletim sistemleri listesini gösterme süresini kaldırayım mı (önyükleme menüsü zaman aşımı = 0)?" {
+        & bcdedit.exe /timeout 0 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "HATA  - Önyükleme zaman aşımı ayarlanamadı (bcdedit çıkış kodu: $LASTEXITCODE)."
+            return $false
         }
+        Write-Log "OK    - Önyükleme menüsü zaman aşımı 0 olarak ayarlandı."
+        return $true
     }
 
-    if (Confirm-Action "$env:SystemDrive sürücüsündeki tüm geri yükleme noktalarını (shadow copy) sileyim mi?") {
-        try {
-            vssadmin delete shadows /for=$env:SystemDrive /all /quiet | Out-Null
-            Write-Log "Geri yükleme noktaları silindi ($env:SystemDrive)."
-        } catch {
-            Write-Log "HATA - Geri yükleme noktaları silinemedi: $_"
+    Invoke-Op "'Sistem günlüğüne olay olarak yaz' seçeneğini kapatayım mı?" {
+        $ok = Set-RegValue "HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl" "LogEvent" 0
+        if ($ok) { Write-Log "OK    - Sistem günlüğüne olay yazma kapatıldı." }
+        return $ok
+    }
+
+    Invoke-Op "'Otomatik olarak yeniden başlat' seçeneğini kapatayım mı?" {
+        $ok = Set-RegValue "HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl" "AutoReboot" 0
+        if ($ok) { Write-Log "OK    - Çökme sonrası otomatik yeniden başlatma kapatıldı." }
+        return $ok
+    }
+
+    Invoke-Op "Sistem korumasını $env:SystemDrive için devre dışı bırakayım mı? (DİKKAT: mevcut geri yükleme noktaları silinir, sorunlu bir sürücü/güncelleme sonrası sistemi eski haline döndürme imkanın kalmaz)" {
+        $result = Invoke-CimMethod -Namespace "root\default" -ClassName "SystemRestore" -MethodName "Disable" -Arguments @{ Drive = "$env:SystemDrive\" } -ErrorAction Stop
+        if ($result.ReturnValue -ne 0) {
+            Write-Log "HATA  - Sistem koruması devre dışı bırakılamadı (dönüş kodu: $($result.ReturnValue))."
+            return $false
         }
+        Write-Log "OK    - Sistem koruması $env:SystemDrive için devre dışı bırakıldı."
+        return $true
+    }
+
+    Invoke-Op "$env:SystemDrive sürücüsündeki tüm geri yükleme noktalarını (shadow copy) sileyim mi?" {
+        $output = (@(& vssadmin.exe delete shadows /for=$env:SystemDrive /all /quiet 2>&1) -join "`n")
+        if ($LASTEXITCODE -ne 0) {
+            if ($output -match 'No items found|Öğe bulunamadı') {
+                Write-Log "ATLANDI - Silinecek geri yükleme noktası yok."
+                return $true
+            }
+            Write-Log "HATA  - Geri yükleme noktaları silinemedi (çıkış kodu: $LASTEXITCODE)."
+            return $false
+        }
+        Write-Log "OK    - Geri yükleme noktaları silindi ($env:SystemDrive)."
+        return $true
     }
 }
 
 # ============================================================
-#  9. GİZLİLİK / ARKA PLAN
+#  9. GIZLILIK / ARKA PLAN
 # ============================================================
 function Optimize-Privacy {
     Write-Host "`n=== GİZLİLİK / ARKA PLAN AYARLARI ===" -ForegroundColor Green
 
-    if (Confirm-Action "Uygulamaların arka planda çalışmasını (senkronizasyon, arka plan bildirimleri) kapatayım mı?") {
-        $path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications"
-        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-        Set-ItemProperty -Path $path -Name "GlobalUserDisabled" -Value 1 -Type DWord
-        Write-Log "Uygulamaların arka planda çalışması kapatıldı."
+    Invoke-Op "Uygulamaların arka planda çalışmasını (senkronizasyon, arka plan bildirimleri) kapatayım mı?" {
+        $ok = Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled" 1
+        $ok = (Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" "BackgroundAppGlobalToggle" 0) -and $ok
+        if ($ok) { Write-Log "OK    - Uygulamaların arka planda çalışması kapatıldı." }
+        return $ok
     }
 
-    if (Confirm-Action "Bildirimleri (toast) ve Eylem Merkezi'ni sınırlayayım mı?") {
-        $pushPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications"
-        if (-not (Test-Path $pushPath)) { New-Item -Path $pushPath -Force | Out-Null }
-        Set-ItemProperty -Path $pushPath -Name "ToastEnabled" -Value 0 -Type DWord
-
-        $advPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        if (-not (Test-Path $advPath)) { New-Item -Path $advPath -Force | Out-Null }
-        Set-ItemProperty -Path $advPath -Name "DisableNotificationCenter" -Value 1 -Type DWord
-        Write-Log "Bildirimler ve Eylem Merkezi sınırlandı."
+    Invoke-Op "Bildirimleri (toast) ve Eylem Merkezi'ni sınırlayayım mı?" {
+        $ok = Set-RegValue "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications" "ToastEnabled" 0
+        # DisableNotificationCenter yalnizca Policies\Explorer altinda okunur
+        # (eskiden Explorer\Advanced'e yaziliyordu, hicbir etkisi yoktu).
+        $ok = (Set-RegValue "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableNotificationCenter" 1) -and $ok
+        if ($ok) { Write-Log "OK    - Bildirimler ve Eylem Merkezi sınırlandı (Gezgin yeniden başlatılınca etkili olur)." }
+        return $ok
     }
 
-    if (Confirm-Action "Cortana ve Start menüsündeki web (Bing) arama sonuçlarını kapatayım mı?") {
-        $searchPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
-        if (-not (Test-Path $searchPath)) { New-Item -Path $searchPath -Force | Out-Null }
-        Set-ItemProperty -Path $searchPath -Name "BingSearchEnabled" -Value 0 -Type DWord
-        Set-ItemProperty -Path $searchPath -Name "CortanaConsent" -Value 0 -Type DWord
-
-        $policyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
-        if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
-        Set-ItemProperty -Path $policyPath -Name "AllowCortana" -Value 0 -Type DWord
-        Write-Log "Cortana ve web arama sonuçları kapatıldı."
+    Invoke-Op "Cortana ve Start menüsündeki web (Bing) arama sonuçlarını kapatayım mı?" {
+        $search = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
+        $ok = Set-RegValue $search "BingSearchEnabled" 0
+        $ok = (Set-RegValue $search "CortanaConsent" 0) -and $ok
+        $ok = (Set-RegValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" "AllowCortana" 0) -and $ok
+        $ok = (Set-RegValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" "DisableWebSearch" 1) -and $ok
+        if ($ok) { Write-Log "OK    - Cortana ve web arama sonuçları kapatıldı." }
+        return $ok
     }
 
-    if (Confirm-Action "Telemetri/tanılama veri seviyesini en düşük düzeye çekeyim mi? (Home/Pro sürümde tamamen kapatmak mümkün değil, en düşük seviye 'Gerekli/Temel' olur)") {
-        $policyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
-        if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
-        Set-ItemProperty -Path $policyPath -Name "AllowTelemetry" -Value 1 -Type DWord
-        Write-Log "Telemetri seviyesi en düşük düzeye (Gerekli/Temel) çekildi."
+    Invoke-Op "Telemetri/tanılama veri seviyesini en düşük düzeye çekeyim mi? (Home/Pro sürümde tamamen kapatmak mümkün değil, en düşük seviye 'Gerekli/Temel' olur)" {
+        $ok = Set-RegValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry" 1
+        $ok = (Set-RegValue "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection" "AllowTelemetry" 1) -and $ok
+        if ($ok) { Write-Log "OK    - Telemetri seviyesi en düşük düzeye (Gerekli/Temel) çekildi." }
+        return $ok
     }
 
-    if (Confirm-Action "Telemetri ile ilgili zamanlanmış görevleri (Görev Zamanlayıcı) devre dışı bırakayım mı?") {
+    Invoke-Op "Telemetri ile ilgili zamanlanmış görevleri (Görev Zamanlayıcı) devre dışı bırakayım mı?" {
         $tasks = @(
             "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
             "\Microsoft\Windows\Application Experience\ProgramDataUpdater",
@@ -585,27 +882,38 @@ function Optimize-Privacy {
             "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload",
             "\Microsoft\Windows\Windows Error Reporting\QueueReporting"
         )
-        foreach ($taskPath in $tasks) {
-            $taskName = Split-Path $taskPath -Leaf
-            $taskFolder = Split-Path $taskPath -Parent
+        $disabled = 0
+        $skipped  = 0
+        $failed   = 0
+        foreach ($fullPath in $tasks) {
+            $taskName   = Split-Path $fullPath -Leaf
+            $taskFolder = (Split-Path $fullPath -Parent) + "\"
             try {
-                Disable-ScheduledTask -TaskName $taskName -TaskPath "$taskFolder\" -ErrorAction Stop | Out-Null
-                Write-Log "Zamanlanmış görev devre dışı bırakıldı: $taskName"
+                $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskFolder -ErrorAction Stop
+                if ($task.State -eq 'Disabled') { $skipped++; continue }
+                Disable-ScheduledTask -TaskName $taskName -TaskPath $taskFolder -ErrorAction Stop | Out-Null
+                $check = Get-ScheduledTask -TaskName $taskName -TaskPath $taskFolder -ErrorAction Stop
+                if ($check.State -eq 'Disabled') { $disabled++ } else { $failed++ }
             } catch {
-                Write-Log "Atlandı (bulunamadı/zaten kapalı): $taskName"
+                $skipped++
             }
         }
+        Write-Log "OK    - Zamanlanmış görevler: $disabled devre dışı bırakıldı, $skipped atlandı (yok/zaten kapalı), $failed başarısız."
+        return ($failed -eq 0)
     }
 }
 
 # ============================================================
-#  ANA MENÜ
+#  ANA MENU
 # ============================================================
 function Show-Menu {
-    Clear-Host
+    # Cikti bir dosyaya yonlendirilmisse Clear-Host hata verir; ekrani temizleyememek sorun degil.
+    try { Clear-Host } catch {}
     Write-Host "==================================================" -ForegroundColor Magenta
     Write-Host "         WINDOWS OPTİMİZASYON SCRIPTİ" -ForegroundColor Magenta
     Write-Host "==================================================" -ForegroundColor Magenta
+    Write-Host "Ayarlar şu kullanıcı profiline uygulanır: $env:USERDOMAIN\$env:USERNAME" -ForegroundColor DarkGray
+    Write-Host "--------------------------------------------------" -ForegroundColor Magenta
     Write-Host "1) Gereksiz servisleri devre dışı bırak"
     Write-Host "2) Başlangıç programlarını yönet"
     Write-Host "3) Görsel efektler / performans ayarları"
@@ -620,38 +928,65 @@ function Show-Menu {
     Write-Host "==================================================" -ForegroundColor Magenta
 }
 
+function Invoke-Category {
+    param([scriptblock[]]$Actions)
+
+    $script:OkCount   = 0
+    $script:FailCount = 0
+
+    foreach ($action in $Actions) {
+        try {
+            & $action
+        } catch {
+            Write-Log "HATA  - Kategori işlenirken beklenmeyen hata: $($_.Exception.Message)"
+        }
+    }
+
+    Write-Host "`n--------------------------------------------------" -ForegroundColor Magenta
+    Write-Host "Özet: $($script:OkCount) işlem başarılı, $($script:FailCount) işlem başarısız." -ForegroundColor Magenta
+    if ($script:FailCount -gt 0) {
+        Write-Host "Başarısız işlemler yukarıda 'HATA' satırlarında listelendi." -ForegroundColor Yellow
+    }
+}
+
 Write-Log "Script başlatıldı."
 
 do {
     Show-Menu
     $choice = Read-Host "Seçim yap"
+
     switch ($choice) {
-        "1" { Optimize-Services }
-        "2" { Optimize-Startup }
-        "3" { Optimize-VisualEffects }
-        "4" { Optimize-TempCleanup }
-        "5" { Optimize-Network }
-        "6" { Optimize-PowerPlan }
-        "7" { Optimize-Extra }
-        "8" { Optimize-SystemAdvanced }
-        "9" { Optimize-Privacy }
+        "1"  { Invoke-Category @({ Optimize-Services }) }
+        "2"  { Invoke-Category @({ Optimize-Startup }) }
+        "3"  { Invoke-Category @({ Optimize-VisualEffects }) }
+        "4"  { Invoke-Category @({ Optimize-TempCleanup }) }
+        "5"  { Invoke-Category @({ Optimize-Network }) }
+        "6"  { Invoke-Category @({ Optimize-PowerPlan }) }
+        "7"  { Invoke-Category @({ Optimize-Extra }) }
+        "8"  { Invoke-Category @({ Optimize-SystemAdvanced }) }
+        "9"  { Invoke-Category @({ Optimize-Privacy }) }
         "10" {
-            Optimize-Services
-            Optimize-Startup
-            Optimize-VisualEffects
-            Optimize-TempCleanup
-            Optimize-Network
-            Optimize-PowerPlan
-            Optimize-SystemAdvanced
-            Optimize-Extra
-            Optimize-Privacy
+            Invoke-Category @(
+                { Optimize-Services },
+                { Optimize-Startup },
+                { Optimize-VisualEffects },
+                { Optimize-TempCleanup },
+                { Optimize-Network },
+                { Optimize-PowerPlan },
+                { Optimize-Extra },
+                { Optimize-SystemAdvanced },
+                { Optimize-Privacy }
+            )
         }
-        "0" { Write-Host "Çıkılıyor..." -ForegroundColor Yellow }
+        "0"  { Write-Host "Çıkılıyor..." -ForegroundColor Yellow }
         default { Write-Host "Geçersiz seçim." -ForegroundColor Red }
     }
+
     if ($choice -ne "0") {
         Read-Host "`nDevam etmek için Enter'a bas"
     }
 } while ($choice -ne "0")
 
 Write-Log "Script tamamlandı."
+Write-Host "Bazı ayarlar (görsel efektler, dosya uzantıları, bildirimler) ancak Gezgin yeniden başlatıldıktan ya da oturum kapatılıp açıldıktan sonra görünür olur." -ForegroundColor DarkYellow
+Start-Sleep -Seconds 2

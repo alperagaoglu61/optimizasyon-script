@@ -9,8 +9,17 @@ Windows 10/11 için performans, gizlilik ve disk temizliği ayarlarını tek yer
 | `optimize-windows.ps1` | Konsol sürümü. Numaralı menü, her işlem öncesi `[e/H]` onayı ister. |
 | `optimize-windows-gui.ps1` | WPF GUI sürümü. Koyu tema, kilit ekranı, kategori bazlı checkbox listesi, ilerleme çubuğu ve canlı log kutusu. |
 | `optimize-windows-gui.exe` | GUI sürümünün ps2exe ile derlenmiş hâli. Konsol penceresi açmaz, çift tıklayınca UAC otomatik sorar. |
+| `optimize-windows.exe` | Konsol sürümünün ps2exe ile derlenmiş hâli. Çift tıklayınca UAC otomatik sorar. |
 
 GUI sürümündeki tüm optimizasyon mantığı (`Optimize-*` fonksiyonları) konsol sürümüyle birebir aynı; sadece onay mekanizması `Read-Host` yerine checkbox'lara bağlanmış.
+
+## Çalışma mantığı ve doğrulama
+
+- **Her değişiklik doğrulanır.** Kayıt defterine yazılan her değer hemen geri okunup karşılaştırılır; servisler `Start=4` (Disabled) değeri okunarak kontrol edilir. Doğrulanamayan işlem log'a `HATA` olarak yazılır. Yani "yapıldı" yazan bir satır, gerçekten yapıldığı doğrulanmış demektir.
+- **Arayüz donmaz.** GUI sürümünde tarama ve uygulama işleri ayrı bir runspace'te (arka plan iş parçacığında) çalışır; pencere açık kalır, log ve ilerleme çubuğu canlı akar.
+- **Her işlem yalıtılmıştır.** Bir işlem hata verirse diğerleri çalışmaya devam eder, program kapanmaz.
+- **İşlemler kararlı bir anahtarla eşleştirilir.** Servis durumu ("Çalışıyor/Durduruldu") değişse bile seçtiğin işlem doğru eşleşir; ikinci uygulamada sessizce atlanmaz.
+- Bazı ayarlar (görsel efektler, dosya uzantıları, bildirimler) yalnızca Gezgin yeniden başlatıldıktan veya oturum kapatılıp açıldıktan sonra görünür olur. Görsel Efektler kategorisinde bunun için ayrı bir "Gezgin'i yeniden başlat" seçeneği vardır.
 
 ## Özellikler
 
@@ -59,9 +68,18 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ## Derleme (ps2exe)
 
 ```powershell
+Install-Module ps2exe -Scope CurrentUser   # kurulu değilse
+
 Invoke-ps2exe -inputFile .\optimize-windows-gui.ps1 -outputFile .\optimize-windows-gui.exe `
-    -noConsole -STA -requireAdmin -title "Windows Optimizasyon Aracı" -product "Windows Optimizasyon Aracı"
+    -noConsole -STA -requireAdmin -title "Windows Optimizasyon Aracı" -product "Windows Optimizasyon Aracı" `
+    -description "Windows optimizasyon aracı (GUI)"
+
+Invoke-ps2exe -inputFile .\optimize-windows.ps1 -outputFile .\optimize-windows.exe `
+    -requireAdmin -title "Windows Optimizasyon Scripti" -product "Windows Optimizasyon Aracı" `
+    -description "Windows optimizasyon scripti (konsol)"
 ```
+
+GUI sürümü `-STA` olmadan derlenmemelidir; WPF penceresi yalnızca STA modunda açılır. Her iki `.ps1` dosyası da UTF-8 BOM ile kaydedilmelidir, aksi halde Türkçe karakterler bozulur.
 
 ## Uyarılar
 
