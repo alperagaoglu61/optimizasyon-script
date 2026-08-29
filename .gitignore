@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# Hassas bilgiler / kimlik bilgileri
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.env
+secrets.*
+*secret*
+*credential*
+*password*
+*apikey*
+*api_key*
+*token*
+*.key
+*.pem
+*.pfx
+*.p12
+*.cer
+*.crt
+*.pubxml.user
+*.publishsettings
+.netrc
+.npmrc
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+known_hosts
+*.ppk
+
+# PowerShell kimlik/oturum dosyalari
+*.psd1.user
+*.clixml
+*Credential*.xml
+
+# ---------------------------------------------------------------------------
+# Loglar ve raporlar
+# ---------------------------------------------------------------------------
+*.log
+logs/
+log/
+*.etl
+*.evtx
+*.dmp
+*.trace
+optimizasyon-log*.txt
+rapor*.txt
+
+# ---------------------------------------------------------------------------
+# Derleme ciktilari ve gecici dosyalar
+# ---------------------------------------------------------------------------
+build/
+dist/
+out/
+bin/
+obj/
+temp/
+tmp/
+*.tmp
+*.bak
+*.old
+*.orig
+*.swp
+~$*
+
+# ---------------------------------------------------------------------------
+# Isletim sistemi / editor
+# ---------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+.DS_Store
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# ---------------------------------------------------------------------------
+# Ajan / arac ayarlari
+# ---------------------------------------------------------------------------
+.claude/settings.local.json

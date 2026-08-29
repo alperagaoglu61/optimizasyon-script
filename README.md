@@ -90,3 +90,35 @@ GUI sürümü `-STA` olmadan derlenmemelidir; WPF penceresi yalnızca STA modund
 ## Sürümler (Releases)
 
 Derlenmiş `.exe` dosyaları [Releases](../../releases) sekmesinden indirilebilir.
+
+## Lisans ve Kullanım Koşulları
+
+**Telif Hakkı © 2026 Alper İbrahimağaoğlu — Tüm Hakları Saklıdır (All Rights Reserved).**
+
+Bu depo **açık kaynak değildir**. Kod herkese açık olarak görüntülenebilir olması, serbestçe kullanılabileceği anlamına gelmez. Tam hukuki metin için [LICENSE](LICENSE) dosyasına bakınız.
+
+### İzin verilenler
+
+- Kaynak kodu kişisel veya eğitim amacıyla görüntülemek ve incelemek.
+- Değiştirilmemiş bir kopyayı indirip kendi cihazınızda kişisel, ticari olmayan amaçla çalıştırmak.
+
+### Yazılı izin olmadan yasaklananlar
+
+- **Değiştirme / türev eser (No Derivatives):** kodu düzenlemek, uyarlamak, çevirmek veya ondan türetilmiş bir sürüm üretmek.
+- **Yeniden dağıtım (No Redistribution):** kodu kopyalayıp başka bir depoda, web sitesinde, mağazada veya platformda yayımlamak, aynalamak (mirror), yeniden yüklemek.
+- **Ticari kullanım (No Commercial Use):** satmak, kiralamak, lisanslamak veya bir ürün/hizmetin parçası hâline getirmek.
+- Telif başlıklarını veya lisans dosyasını kaldırmak ya da değiştirmek.
+- Kodu yapay zekâ modeli eğitiminde veri kümesi olarak kullanmak.
+
+### Atıf zorunluluğu
+
+Bu projeye yapılan her referans, alıntı veya bahis; **Alper İbrahimağaoğlu** adını ve bu deponun bağlantısını açıkça belirtmek zorundadır:
+
+> Windows Optimizasyon Aracı — © 2026 Alper İbrahimağaoğlu
+> https://github.com/alperagaoglu61/optimizasyon-script
+
+### Sorumluluk reddi
+
+Yazılım "olduğu gibi" sunulur, hiçbir garanti verilmez. Windows ayarlarında ve kayıt defterinde kalıcı değişiklikler yapar; oluşabilecek veri kaybı veya sistem kararsızlığından telif sahibi sorumlu değildir. Tüm risk kullanıcıya aittir.
+
+Yukarıda yasaklanan kullanımlar için izin talebi: https://github.com/alperagaoglu61

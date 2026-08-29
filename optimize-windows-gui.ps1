@@ -1,5 +1,27 @@
 ﻿#Requires -Version 5.1
 <#
+    ===========================================================================
+    Telif Hakki (c) 2026 Alper Ibrahimagaoglu - Tum Haklari Saklidir.
+    Copyright (c) 2026 Alper Ibrahimagaoglu - All Rights Reserved.
+
+    Bu dosya tescilli (proprietary) yazilimdir. Yalnizca kisisel ve egitim
+    amacli olarak GORUNTULENEBILIR ve DEGISTIRILMEDEN calistirilabilir.
+
+    Telif sahibinin yazili izni olmadan YASAKTIR:
+      * Degistirme, uyarlama, turev eser olusturma (No Derivatives)
+      * Kopyalama, yeniden dagitma, aynalama, baska bir depoda/platformda
+        yayimlama (No Redistribution)
+      * Ticari kullanim, satis, kiralama, alt lisanslama (No Commercial Use)
+      * Bu telif basligini kaldirma veya degistirme
+
+    Tum kosullar icin depodaki LICENSE dosyasina bakiniz.
+    https://github.com/alperagaoglu61/optimizasyon-script
+
+    GARANTI YOKTUR. Yazilim Windows ayarlarinda ve kayit defterinde kalici
+    degisiklikler yapar; tum risk kullaniciya aittir.
+    ===========================================================================
+#>
+<#
     optimize-windows-gui.ps1
     -------------------------
     optimize-windows.ps1'in WPF arayuzlu surumu.

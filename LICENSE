@@ -1,0 +1,100 @@
+Copyright (c) 2026 Alper İbrahimağaoğlu
+Tüm Hakları Saklıdır / All Rights Reserved
+
+===============================================================================
+TÜRKÇE (Bağlayıcı Metin)
+===============================================================================
+
+Bu depodaki tüm kaynak kodlar, betikler (.ps1), derlenmiş çalıştırılabilir
+dosyalar (.exe), dokümantasyon ve diğer içerikler ("Yazılım") Alper
+İbrahimağaoğlu'na ("Telif Sahibi") aittir ve telif hakkı yasaları ile
+korunmaktadır.
+
+1. İZİN VERİLENLER
+   a) Yazılımı yalnızca kişisel veya eğitim amacıyla görüntülemek ve
+      incelemek.
+   b) Yazılımın değiştirilmemiş bir kopyasını kişisel, ticari olmayan
+      kullanım için indirmek ve kendi cihazınızda çalıştırmak.
+
+2. AÇIKÇA YASAK OLANLAR
+   Telif Sahibi'nin önceden yazılı izni olmaksızın aşağıdakiler kesinlikle
+   yasaktır:
+   a) Yazılımın herhangi bir bölümünü değiştirmek, uyarlamak, çevirmek,
+      türev eser oluşturmak veya tersine mühendislik uygulamak
+      (No Derivatives).
+   b) Yazılımı veya herhangi bir parçasını yeniden dağıtmak, yayımlamak,
+      kopyalamak, paylaşmak, aynalamak (mirror), yeniden yüklemek veya
+      başka bir depoda, web sitesinde, mağazada, pakette ya da platformda
+      listelemek (No Redistribution).
+   c) Yazılımı ticari amaçla kullanmak, satmak, kiralamak, lisanslamak,
+      alt lisanslamak veya bir hizmetin/ürünün parçası hâline getirmek
+      (No Commercial Use).
+   d) Bu lisans metnini, telif hakkı bildirimlerini veya kaynak kod
+      dosyalarındaki başlık (header) bloklarını kaldırmak, gizlemek ya da
+      değiştirmek.
+   e) Yazılımı bir yapay zekâ modelinin eğitimi için veri kümesi olarak
+      kullanmak.
+
+3. ATIF (ATTRIBUTION)
+   Yazılıma yapılacak her türlü referans, alıntı veya bahis, Telif Sahibi'nin
+   adını (Alper İbrahimağaoğlu) ve bu deponun bağlantısını açıkça içermek
+   zorundadır.
+
+4. GARANTİ REDDİ
+   YAZILIM "OLDUĞU GİBİ" SUNULMAKTADIR; AÇIK VEYA ZIMNİ HİÇBİR GARANTİ
+   VERİLMEZ. YAZILIM WINDOWS İŞLETİM SİSTEMİ AYARLARINDA VE KAYIT DEFTERİNDE
+   KALICI DEĞİŞİKLİKLER YAPAR. KULLANIMDAN DOĞACAK VERİ KAYBI, SİSTEM
+   KARARSIZLIĞI VEYA DİĞER ZARARLARDAN TELİF SAHİBİ HİÇBİR ŞEKİLDE SORUMLU
+   TUTULAMAZ. TÜM RİSK KULLANICIYA AİTTİR.
+
+5. LİSANSIN SONA ERMESİ
+   Bu koşullardan herhangi birinin ihlali durumunda, size tanınan haklar
+   otomatik ve derhal sona erer; Yazılımın tüm kopyalarını silmeniz gerekir.
+
+6. İZİN TALEBİ
+   Yukarıda yasaklanan kullanımlar için yazılı izin talep edilebilir:
+   https://github.com/alperagaoglu61
+
+===============================================================================
+ENGLISH (Informative Translation)
+===============================================================================
+
+All source code, scripts (.ps1), compiled executables (.exe), documentation
+and other content in this repository (the "Software") are owned by Alper
+İbrahimağaoğlu (the "Copyright Holder") and protected by copyright law.
+
+1. PERMITTED
+   a) Viewing and reading the Software for personal or educational purposes.
+   b) Downloading and running an unmodified copy for personal,
+      non-commercial use on your own device.
+
+2. STRICTLY PROHIBITED without prior written permission of the Copyright
+   Holder:
+   a) Modifying, adapting, translating, creating derivative works of, or
+      reverse engineering any part of the Software (No Derivatives).
+   b) Redistributing, publishing, copying, sharing, mirroring, re-uploading
+      or listing the Software or any part of it in any other repository,
+      website, store, package or platform (No Redistribution).
+   c) Using the Software commercially: selling, renting, licensing,
+      sublicensing, or including it in any product or service
+      (No Commercial Use).
+   d) Removing, obscuring or altering this license, the copyright notices,
+      or the header blocks in the source files.
+   e) Using the Software as training data for any AI/ML model.
+
+3. ATTRIBUTION
+   Any reference, quotation or mention of the Software must clearly credit
+   Alper İbrahimağaoğlu and link to this repository.
+
+4. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED. IT MAKES PERSISTENT CHANGES TO WINDOWS SETTINGS AND THE
+   REGISTRY. THE COPYRIGHT HOLDER IS NOT LIABLE FOR ANY DATA LOSS, SYSTEM
+   INSTABILITY OR OTHER DAMAGES. ALL RISK IS ASSUMED BY THE USER.
+
+5. TERMINATION
+   Any breach of these terms immediately and automatically terminates the
+   rights granted to you; you must delete all copies of the Software.
+
+6. PERMISSION REQUESTS
+   https://github.com/alperagaoglu61
